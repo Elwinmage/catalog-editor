@@ -7,7 +7,8 @@ import re
 import secrets
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from datetime import UTC, datetime
+from typing import Any
 
 from homeassistant.components.websocket_api import async_register_command
 from homeassistant.components.websocket_api.connection import ActiveConnection
@@ -17,29 +18,31 @@ from homeassistant.components.websocket_api.decorators import (
     websocket_command,
 )
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.http import HomeAssistantView
 
-# Home Assistant validates with probatio since 2026.9: schemas must come from it
-if TYPE_CHECKING:
-    import probatio as vol  # pyright: ignore[reportMissingImports]
-else:
-    try:
-        import probatio as vol
-    except ImportError:  # pragma: no cover - depends on the installed HA version
-        import voluptuous as vol
-
 from .catalog_rules import DESCRIPTORS, Report, validate_draft
 from .catalog_runtime import SIGNAL_USER_CATALOG_CHANGED, CatalogUpdater
+from .compat import vol
 from .const import DOMAIN, MAX_UPLOADS, SECTION_KINDS, UPLOAD_TTL_S, VIEW_GROUPS
 from .context import (
     build_context,
+    entry_label,
     list_entries,
     locate_visual,
     provider,
     strip_entry,
 )
+from .contribute import contribute
+from .contributions import Contributions
 from .forms import build_form, suggest_id
+from .github import (
+    GithubClient,
+    GithubError,
+    poll_login,
+    start_login,
+)
 from .hints import HAS_VISUAL
 from .images import MAX_UPLOAD_BYTES, ImageError, Visual, process_image
 from .schemas import SchemaStore
@@ -65,6 +68,11 @@ class EditorData:
 
     schemas: SchemaStore
     catalog: UserCatalog
+    contributions: Contributions
+    #: OAuth App of the editor (its client id is public)
+    client_id: str
+    #: Login in progress: device code, expiry (monotonic clock), poll interval
+    login: tuple[str, float, int] | None = None
     #: token -> (processed picture, expiry on the monotonic clock)
     uploads: dict[str, tuple[Visual, float]] = field(default_factory=dict)
 
@@ -141,7 +149,7 @@ def _command(schema: dict[Any, Any], name: str):
         ) -> None:
             try:
                 result = await func(hass, msg)
-            except _Refused as err:
+            except (_Refused, GithubError) as err:
                 connection.send_error(msg["id"], err.code, str(err))
                 return
             connection.send_result(msg["id"], result)
@@ -343,6 +351,200 @@ async def ws_delete(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, bool]
     return {"deleted": True}
 
 
+# -- GitHub -----------------------------------------------------------------------
+
+
+def _editor(hass: HomeAssistant) -> EditorData:
+    data = _data(hass)
+    if data is None:
+        raise _Refused("not_loaded", "The editor is not loaded")
+    return data
+
+
+def _client(hass: HomeAssistant, data: EditorData) -> GithubClient:
+    if data.contributions.token is None:
+        raise _Refused("auth_required", "Sign in to GitHub first")
+    return GithubClient(async_get_clientsession(hass), data.contributions.token)
+
+
+async def _signed_out(data: EditorData, err: GithubError) -> None:
+    """A refused token is of no use any more."""
+    if err.code == "auth_required":
+        await data.contributions.async_sign_out()
+
+
+@_command({}, "github_status")
+async def ws_github_status(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
+    """Whether the user is signed in to GitHub."""
+    data = _editor(hass)
+    return {
+        "connected": data.contributions.token is not None,
+        "login": data.contributions.login,
+        "login_pending": data.login is not None and data.login[1] > time.monotonic(),
+    }
+
+
+@_command({}, "github_login")
+async def ws_github_login(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
+    """Start the device flow: a code to type on github.com/login/device."""
+    data = _editor(hass)
+    code = await start_login(async_get_clientsession(hass), data.client_id)
+    data.login = (code.device_code, time.monotonic() + code.expires_in, code.interval)
+    return {
+        "user_code": code.user_code,
+        "verification_uri": code.verification_uri,
+        "expires_in": code.expires_in,
+        "interval": code.interval,
+    }
+
+
+@_command({}, "github_login_poll")
+async def ws_github_login_poll(
+    hass: HomeAssistant, msg: dict[str, Any]
+) -> dict[str, Any]:
+    """One check of the login in progress: pending, ok, expired or denied."""
+    data = _editor(hass)
+    if data.login is None:
+        raise _Refused("no_login", "No login in progress")
+    device_code, expiry, interval = data.login
+    if expiry <= time.monotonic():
+        data.login = None
+        return {"status": "expired"}
+    session = async_get_clientsession(hass)
+    status, value = await poll_login(session, data.client_id, device_code)
+    if status == "pending":
+        interval = max(interval, int(value))
+        data.login = (device_code, expiry, interval)
+        return {"status": "pending", "interval": interval}
+    data.login = None
+    if status != "ok":
+        return {"status": status}
+    login = await GithubClient(session, str(value)).login()
+    await data.contributions.async_sign_in(str(value), login)
+    return {"status": "ok", "login": login}
+
+
+@_command({}, "github_logout")
+async def ws_github_logout(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, bool]:
+    """Forget the GitHub token."""
+    await _editor(hass).contributions.async_sign_out()
+    return {"connected": False}
+
+
+@_command({**_ENTRY, vol.Required("attest"): bool}, "contribute")
+async def ws_contribute(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
+    """Propose an entry of the user to the catalog as a pull request."""
+    target = await _target(hass, msg)
+    if not msg["attest"]:
+        raise _Refused(
+            "attestation_required", "Certify the picture is yours (CC BY 4.0)"
+        )
+    data = target.data
+    section, kind, entry_id = target.section, target.kind, msg["entry_id"]
+    client = _client(hass, data)
+    if not await hass.async_add_executor_job(data.catalog.has, section, kind, entry_id):
+        raise _Refused("no_user_copy", "Save the entry first")
+    entry = await hass.async_add_executor_job(
+        data.catalog.read, section, kind, entry_id
+    )
+    report, visuals = await _check(
+        hass, target, {**msg, "data": entry, "remove_visual": False}
+    )
+    if report.errors:
+        return {"submitted": False, **_report(report)}
+    previous = data.contributions.find(section, kind, entry_id)
+    try:
+        pull, update, appended = await contribute(
+            client,
+            str(data.contributions.login),
+            previous=previous,
+            kind=kind,
+            entry_id=entry_id,
+            label=entry_label(kind, entry_id, entry),
+            data=entry,
+            visuals=visuals,
+        )
+    except GithubError as err:
+        await _signed_out(data, err)
+        raise
+    now = datetime.now(UTC).isoformat(timespec="seconds")
+    await data.contributions.async_record(
+        {
+            "section": section,
+            "kind": kind,
+            "id": entry_id,
+            "label": entry_label(kind, entry_id, entry),
+            "number": pull.number,
+            "url": pull.url,
+            "branch": pull.branch,
+            "state": pull.state,
+            "update": update,
+            "created": previous["created"] if appended and previous else now,
+            "released": False,
+        }
+    )
+    return {
+        "submitted": True,
+        "number": pull.number,
+        "url": pull.url,
+        "appended": appended,
+        **_report(report),
+    }
+
+
+def _released(data: EditorData, updater: CatalogUpdater, item: dict[str, Any]) -> bool:
+    """The catalog the integrations run has the entry, as the user has it."""
+    section, kind, entry_id = item["section"], item["kind"], item["id"]
+    if not data.catalog.has(section, kind, entry_id):
+        return False
+    own = data.catalog.path_of(section, kind, entry_id)
+    relative = own.relative_to(data.catalog.root(section))
+    if kind != "task":
+        relative /= DESCRIPTORS[kind]
+    mine = (data.catalog.root(section) / relative).read_bytes()
+    for layer in updater._layers():
+        if layer.name in ("builtin", "pack"):
+            theirs = layer.root / relative
+            if theirs.is_file() and theirs.read_bytes() == mine:
+                return True
+    return False
+
+
+async def _retire(hass: HomeAssistant, data: EditorData, item: dict[str, Any]) -> None:
+    """Once a merged entry reached the integrations, the local copy is redundant."""
+    updater = provider(hass, item["section"])
+    if updater is None:
+        return
+    if await hass.async_add_executor_job(_released, data, updater, item):
+        await hass.async_add_executor_job(
+            data.catalog.delete, item["section"], item["kind"], item["id"]
+        )
+        item["released"] = True
+        async_dispatcher_send(hass, SIGNAL_USER_CATALOG_CHANGED, item["section"])
+
+
+@_command({}, "contributions")
+async def ws_contributions(
+    hass: HomeAssistant, msg: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """The pull requests made with the editor, their state refreshed."""
+    data = _editor(hass)
+    store = data.contributions
+    if store.token is not None:
+        client = _client(hass, data)
+        try:
+            for item in store.items:
+                if item["state"] == "open":
+                    item["state"] = (await client.pull(item["number"])).state
+        except GithubError as err:
+            await _signed_out(data, err)  # offline or refused: the last state stays
+    for item in store.items:
+        if item["state"] == "merged" and not item.get("released"):
+            await _retire(hass, data, item)
+    await store.async_save()
+    return store.items
+
+
 # -- upload -----------------------------------------------------------------------
 
 
@@ -397,6 +599,12 @@ def async_register_api(hass: HomeAssistant) -> None:
         ws_validate,
         ws_save,
         ws_delete,
+        ws_github_status,
+        ws_github_login,
+        ws_github_login_poll,
+        ws_github_logout,
+        ws_contribute,
+        ws_contributions,
     ):
         async_register_command(hass, command)
     if getattr(hass, "http", None) is not None:

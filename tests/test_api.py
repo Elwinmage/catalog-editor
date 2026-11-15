@@ -121,6 +121,11 @@ async def test_not_loaded_and_non_admin(
     for command, fields in (
         ("catalogs", {}),
         ("form", {"section": "equipment", "kind": "item"}),
+        ("github_status", {}),
+        ("github_login", {}),
+        ("github_login_poll", {}),
+        ("github_logout", {}),
+        ("contributions", {}),
     ):
         assert (await call(admin, command, **fields))["error"]["code"] == "not_loaded"
     await setup_editor(hass, aioclient_mock, release=False)
@@ -329,3 +334,279 @@ async def test_upload_bookkeeping(hass, aioclient_mock, monkeypatch):
 async def test_register_api_once(hass, aioclient_mock):
     await setup_editor(hass, aioclient_mock)
     api.async_register_api(hass)  # second call is a no-op
+
+
+# -- GitHub ---------------------------------------------------------------------------
+
+from fake_github import FakeGithub  # noqa: E402
+from homeassistant.helpers.dispatcher import async_dispatcher_connect  # noqa: E402
+
+from custom_components.reeftech_catalog_editor import github  # noqa: E402
+
+LOGIN = "https://github.com/login"
+BASE = {"section": "equipment", "kind": "item", "entry_id": "acme-x1"}
+
+
+@pytest.fixture
+def gh(aioclient_mock, monkeypatch):
+    monkeypatch.setattr(github, "FORK_DELAY_S", 0)
+    return FakeGithub(aioclient_mock)
+
+
+async def sign_in(hass):
+    await hass.data[T].contributions.async_sign_in("tok", "elwin")
+
+
+async def save_item(editor, hass_client, **extra):
+    http = await hass_client()
+    token = (await (await upload(http, png())).json())["token"]
+    saved = (await call(editor, "save", data=ITEM, visual=token, **BASE, **extra))[
+        "result"
+    ]
+    assert saved["saved"] is True, saved
+
+
+async def test_login_flow(editor, hass, aioclient_mock):
+    assert (await call(editor, "github_status"))["result"] == {
+        "connected": False,
+        "login": None,
+        "login_pending": False,
+    }
+    assert (await call(editor, "github_login_poll"))["error"]["code"] == "no_login"
+    aioclient_mock.post(
+        f"{LOGIN}/device/code",
+        json={
+            "device_code": "dev",
+            "user_code": "ABCD-1234",
+            "verification_uri": "https://github.com/login/device",
+            "expires_in": 900,
+            "interval": 5,
+        },
+    )
+    started = (await call(editor, "github_login"))["result"]
+    assert started["user_code"] == "ABCD-1234" and started["interval"] == 5
+    assert (await call(editor, "github_status"))["result"]["login_pending"] is True
+
+    answers = [
+        {"error": "authorization_pending"},
+        {"error": "slow_down", "interval": 10},
+    ]
+
+    async def token(method, url, data):
+        from pytest_homeassistant_custom_component.test_util.aiohttp import (
+            AiohttpClientMockResponse,
+        )
+
+        return AiohttpClientMockResponse(method, url, json=answers.pop(0))
+
+    aioclient_mock.post(f"{LOGIN}/oauth/access_token", side_effect=token)
+    assert (await call(editor, "github_login_poll"))["result"] == {
+        "status": "pending",
+        "interval": 5,
+    }
+    assert (await call(editor, "github_login_poll"))["result"] == {
+        "status": "pending",
+        "interval": 10,
+    }
+
+    aioclient_mock.clear_requests()
+    FakeGithub(aioclient_mock)
+    aioclient_mock.post(f"{LOGIN}/oauth/access_token", json={"access_token": "tok"})
+    ok = (await call(editor, "github_login_poll"))["result"]
+    assert ok == {"status": "ok", "login": "elwin"}
+    assert hass.data[T].login is None
+    assert (await call(editor, "github_status"))["result"]["connected"] is True
+    assert (await call(editor, "github_logout"))["result"] == {"connected": False}
+    assert hass.data[T].contributions.token is None
+
+
+async def test_login_ends(editor, hass, aioclient_mock, monkeypatch):
+    aioclient_mock.post(
+        f"{LOGIN}/device/code",
+        json={
+            "device_code": "d",
+            "user_code": "U",
+            "verification_uri": "v",
+            "expires_in": 900,
+        },
+    )
+    await call(editor, "github_login")
+    aioclient_mock.post(f"{LOGIN}/oauth/access_token", json={"error": "access_denied"})
+    assert (await call(editor, "github_login_poll"))["result"] == {"status": "denied"}
+    assert hass.data[T].login is None
+    await call(editor, "github_login")
+    hass.data[T].login = ("d", 0.0, 5)  # long expired
+    assert (await call(editor, "github_login_poll"))["result"] == {"status": "expired"}
+    assert (await call(editor, "github_status"))["result"]["login_pending"] is False
+    aioclient_mock.clear_requests()
+    aioclient_mock.post(f"{LOGIN}/device/code", json={"error": "unauthorized_client"})
+    assert (await call(editor, "github_login"))["error"]["code"] == "login_refused"
+
+
+async def test_contribute_refusals(editor, hass, hass_client, gh):
+    assert (await call(editor, "contribute", attest=False, **BASE))["error"][
+        "code"
+    ] == "attestation_required"
+    assert (await call(editor, "contribute", attest=True, **BASE))["error"][
+        "code"
+    ] == "auth_required"
+    await sign_in(hass)
+    assert (await call(editor, "contribute", attest=True, **BASE))["error"][
+        "code"
+    ] == "no_user_copy"
+
+    # An entry that was valid when saved but is not any more (its category went)
+    await save_item(editor, hass_client)
+    hass.data["reeftech_catalog"]["fake"].view["categories"].pop("heater")
+    refused = (await call(editor, "contribute", attest=True, **BASE))["result"]
+    assert refused["submitted"] is False and refused["errors"]
+    assert gh.pulls == {}
+
+    gh.valid = False  # the token was revoked
+    hass.data["reeftech_catalog"]["fake"].view["categories"]["heater"] = {
+        "name": {"en": "Heater"},
+        "scopes": ["aquarium"],
+    }
+    revoked = await call(editor, "contribute", attest=True, **BASE)
+    assert revoked["error"]["code"] == "auth_required"
+    assert hass.data[T].contributions.token is None
+
+
+async def test_contribute_and_follow(editor, hass, hass_client, gh, pack):
+    await sign_in(hass)
+    await save_item(editor, hass_client)
+    signals = []
+    async_dispatcher_connect(hass, SIGNAL_USER_CATALOG_CHANGED, signals.append)
+
+    done = (await call(editor, "contribute", attest=True, **BASE))["result"]
+    assert (
+        done["submitted"] is True and done["appended"] is False and done["number"] == 1
+    )
+    assert done["url"].endswith("/pull/1")
+    files = gh.files("elwin/reeftech-catalog", gh.pulls[1]["head"]["ref"])
+    assert set(files) == {
+        "equipment/items/acme-x1/item.json",
+        "equipment/items/acme-x1/image.webp",
+        "equipment/items/acme-x1/thumb.webp",
+    }
+
+    listed = (await call(editor, "contributions"))["result"]
+    assert [(i["id"], i["state"], i["label"], i["released"]) for i in listed] == [
+        ("acme-x1", "open", "Acme X1", False)
+    ]
+
+    # A change before the merge goes into the same pull request
+    again = (await call(editor, "save", data={**ITEM, "power_w": 5}, **BASE))["result"]
+    assert again["saved"] is True
+    second = (await call(editor, "contribute", attest=True, **BASE))["result"]
+    assert second["appended"] is True and second["number"] == 1 and len(gh.pulls) == 1
+
+    # Merged, but the integrations do not have it yet: the local copy stays
+    gh.pulls[1]["merged_at"] = "2026-11-16T10:00:00Z"
+    merged = (await call(editor, "contributions"))["result"]
+    assert merged[0]["state"] == "merged" and merged[0]["released"] is False
+    assert hass.data[T].catalog.has("equipment", "item", "acme-x1")
+
+    # Released with other content (the maintainer changed it): still kept
+    folder = pack / "items/acme-x1"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "item.json").write_text("{}")
+    assert (await call(editor, "contributions"))["result"][0]["released"] is False
+
+    # Released as it was proposed: the copy of the user is redundant
+    own = hass.data[T].catalog.path_of("equipment", "item", "acme-x1") / "item.json"
+    (folder / "item.json").write_bytes(own.read_bytes())
+    signals.clear()
+    released = (await call(editor, "contributions"))["result"]
+    assert released[0]["released"] is True
+    await hass.async_block_till_done()
+    assert signals == ["equipment"]
+    assert not hass.data[T].catalog.has("equipment", "item", "acme-x1")
+    # Nothing more to do once released
+    assert (await call(editor, "contributions"))["result"][0]["released"] is True
+
+
+async def test_contributions_edge_cases(editor, hass, hass_client, gh, pack):
+    # Signed out: the list is returned as it is
+    assert (await call(editor, "contributions"))["result"] == []
+    await sign_in(hass)
+    await save_item(editor, hass_client)
+    await call(editor, "contribute", attest=True, **BASE)
+
+    # Offline: the last known state stays
+    gh.status = 500
+    assert (await call(editor, "contributions"))["result"][0]["state"] == "open"
+    assert hass.data[T].contributions.token == "tok"
+    # Revoked token: signed out, the list stays
+    gh.status = None
+    gh.valid = False
+    assert (await call(editor, "contributions"))["result"][0]["state"] == "open"
+    assert hass.data[T].contributions.token is None
+
+    # Merged while no integration reads the section, then once the copy is gone
+    item = hass.data[T].contributions.items[0]
+    item["state"] = "merged"
+    saved_providers = hass.data["reeftech_catalog"].pop("fake")
+    assert (await call(editor, "contributions"))["result"][0]["released"] is False
+    hass.data["reeftech_catalog"]["fake"] = saved_providers
+    await hass.async_add_executor_job(
+        hass.data[T].catalog.delete, "equipment", "item", "acme-x1"
+    )
+    assert (await call(editor, "contributions"))["result"][0]["released"] is False
+
+
+async def test_a_task_is_released_as_a_file(editor, hass, gh, pack):
+    await sign_in(hass)
+    task = {"name": {"en": "Rinse"}, "schedule": interval()}
+    base = {"section": "equipment", "kind": "task", "entry_id": "rinse"}
+    assert (await call(editor, "save", data=task, **base))["result"]["saved"] is True
+    assert (await call(editor, "contribute", attest=True, **base))["result"][
+        "submitted"
+    ] is True
+    assert set(gh.files("elwin/reeftech-catalog", gh.pulls[1]["head"]["ref"])) == {
+        "equipment/tasks/rinse.json"
+    }
+    gh.pulls[1]["merged_at"] = "2026-11-16T10:00:00Z"
+    (pack / "tasks").mkdir()
+    own = hass.data[T].catalog.path_of("equipment", "task", "rinse")
+    (pack / "tasks/rinse.json").write_bytes(own.read_bytes())
+    assert (await call(editor, "contributions"))["result"][0]["released"] is True
+    assert not own.exists()
+
+
+# -- the card ---------------------------------------------------------------------------
+
+
+async def test_card_is_served_and_loaded(
+    hass, aioclient_mock, hass_client, monkeypatch
+):
+    import sys
+    from unittest.mock import MagicMock
+
+    loaded = []
+    fake = MagicMock()
+    fake.add_extra_js_url = lambda hass, url: loaded.append(url)
+    monkeypatch.setitem(sys.modules, "homeassistant.components.frontend", fake)
+    hass.config.components.add("frontend")
+    await setup_editor(hass, aioclient_mock)
+    assert len(loaded) == 1 and loaded[0].startswith(
+        "/reeftech_catalog_editor/reeftech-catalog-editor-card.js?v="
+    )
+    http = await hass_client()
+    reply = await http.get("/reeftech_catalog_editor/reeftech-catalog-editor-card.js")
+    assert reply.status == 200 and "reeftech-catalog-editor-card" in await reply.text()
+    # Set up once, even if the entry is loaded again
+    await hass.config_entries.async_reload(
+        hass.config_entries.async_entries(T)[0].entry_id
+    )
+    assert len(loaded) == 1
+
+
+async def test_card_without_http_or_frontend(hass, aioclient_mock):
+    from custom_components.reeftech_catalog_editor.frontend import async_register_card
+
+    # No frontend: the file is served but not loaded by the interface
+    await setup_editor(hass, aioclient_mock)
+    assert "frontend" not in hass.config.components
+    hass.http = None
+    await async_register_card(hass)  # nothing to serve it with: no error

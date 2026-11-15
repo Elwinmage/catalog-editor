@@ -21,3 +21,19 @@ jobs:
         run: pyright custom_components/reeftech_catalog_editor tests
       - name: Tests
         run: pytest --cov=custom_components --cov-report=term-missing --cov-fail-under=100
+
+  card:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+      - name: Install jsdom
+        run: npm install --no-audit --no-fund
+        working-directory: tests/js
+      - name: Syntax
+        run: node --check custom_components/reeftech_catalog_editor/frontend/reeftech-catalog-editor-card.js
+      - name: Card tests
+        run: node --test
+        working-directory: tests/js

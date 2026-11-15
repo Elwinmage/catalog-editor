@@ -15,8 +15,11 @@ async def test_flow(hass, aioclient_mock):
         DOMAIN, context={"source": SOURCE_USER}
     )
     assert form["type"] is FlowResultType.FORM and form["step_id"] == "user"
-    done = await hass.config_entries.flow.async_configure(form["flow_id"], {})
+    done = await hass.config_entries.flow.async_configure(
+        form["flow_id"], {"client_id": " cid "}
+    )
     assert done["type"] is FlowResultType.CREATE_ENTRY
+    assert done["data"] == {"client_id": "cid"}
     await hass.async_block_till_done(wait_background_tasks=True)
     again = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": SOURCE_USER}

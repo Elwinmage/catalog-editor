@@ -36,3 +36,10 @@ repos:
           - Pillow
         pass_filenames: false
         files: ^(custom_components|tests)/
+
+      - id: card-tests
+        name: Card tests (jsdom)
+        entry: bash -c 'cd tests/js && npm install --no-audit --no-fund && node --test'
+        language: system
+        pass_filenames: false
+        files: ^(custom_components/reeftech_catalog_editor/frontend|tests/js)/

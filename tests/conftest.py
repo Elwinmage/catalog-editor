@@ -190,7 +190,7 @@ def providers(hass: HomeAssistant, pack: Path, monkeypatch) -> dict[str, FakeUpd
 async def setup_editor(hass: HomeAssistant, aioclient_mock, release: bool = True):
     if release:
         serve(aioclient_mock)
-    entry = MockConfigEntry(domain=DOMAIN, entry_id="editor")
+    entry = MockConfigEntry(domain=DOMAIN, entry_id="editor", data={"client_id": "cid"})
     entry.add_to_hass(hass)
     await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done(wait_background_tasks=True)

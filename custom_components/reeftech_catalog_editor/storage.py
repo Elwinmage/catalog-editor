@@ -56,6 +56,13 @@ class UserCatalog:
             path.is_file() if kind == "task" else (path / DESCRIPTORS[kind]).is_file()
         )
 
+    def read(self, section: str, kind: str, entry_id: str) -> dict[str, Any]:
+        """The descriptor of an entry of the user."""
+        path = self.path_of(section, kind, entry_id)
+        if kind != "task":
+            path /= DESCRIPTORS[kind]
+        return json.loads(path.read_text(encoding="utf-8"))
+
     def read_visuals(self, section: str, kind: str, entry_id: str) -> dict[str, bytes]:
         """The visuals (every file but the descriptor) of an entry of the user."""
         if kind == "task" or not self.has(section, kind, entry_id):

@@ -3,7 +3,10 @@
     "step": {
       "user": {
         "title": "Éditeur de catalogues ReefTech",
-        "description": "Ajoutez et modifiez des éléments des catalogues ReefTech (équipements, suppléments, paramètres). Ils sont utilisables immédiatement par les intégrations qui lisent les catalogues."
+        "description": "Ajoutez et modifiez des éléments des catalogues ReefTech (équipements, suppléments, paramètres). Ils sont utilisables immédiatement par les intégrations qui lisent les catalogues. Pour les proposer au catalogue, enregistrez une OAuth App GitHub avec le « device flow » activé et collez son client ID.",
+        "data": {
+          "client_id": "Client ID de l'OAuth App GitHub"
+        }
       }
     }
   }
