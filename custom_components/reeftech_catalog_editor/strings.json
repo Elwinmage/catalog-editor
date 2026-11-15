@@ -1,0 +1,10 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "ReefTech catalog editor",
+        "description": "Add and edit entries of the ReefTech catalogs (equipment, supplements, parameters). They are usable at once by the integrations that read the catalogs."
+      }
+    }
+  }
+}

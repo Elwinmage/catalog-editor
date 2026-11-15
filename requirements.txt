@@ -1,0 +1,9 @@
+jsonschema>=4.23
+referencing>=0.35
+Pillow
+pytest>=8
+pytest-cov>=6
+pytest-homeassistant-custom-component
+ruff==0.15.14
+pre-commit
+pyright

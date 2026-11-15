@@ -1,0 +1,10 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Éditeur de catalogues ReefTech",
+        "description": "Ajoutez et modifiez des éléments des catalogues ReefTech (équipements, suppléments, paramètres). Ils sont utilisables immédiatement par les intégrations qui lisent les catalogues."
+      }
+    }
+  }
+}

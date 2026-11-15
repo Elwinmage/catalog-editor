@@ -1,0 +1,38 @@
+# Same checks as .github/workflows/ci.yml, run before each commit:
+#   pip install pre-commit && pre-commit install
+fail_fast: true
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.14
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: local
+    hooks:
+      - id: pyright
+        name: Pyright
+        entry: pyright custom_components/reeftech_catalog_editor tests
+        language: python
+        additional_dependencies:
+          - pyright
+          - pytest-homeassistant-custom-component
+          - jsonschema>=4.23
+          - referencing>=0.35
+          - Pillow
+        pass_filenames: false
+        types: [python]
+
+      - id: pytest
+        name: Tests (100 % coverage)
+        entry: pytest --cov=custom_components --cov-fail-under=100 -q
+        language: python
+        additional_dependencies:
+          - pytest-homeassistant-custom-component
+          - pytest-cov>=6
+          - jsonschema>=4.23
+          - referencing>=0.35
+          - Pillow
+        pass_filenames: false
+        files: ^(custom_components|tests)/
