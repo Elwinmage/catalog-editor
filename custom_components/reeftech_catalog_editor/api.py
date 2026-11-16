@@ -210,6 +210,23 @@ def _check_id(target: _Target, entry_id: str, report: Report) -> None:
         )
 
 
+async def _parameters(hass: HomeAssistant, section: str) -> dict[str, dict[str, Any]]:
+    """The parameters a water test refers to, from the parameters catalog.
+
+    Empty when no integration provides them (the test is then not cross-checked).
+    """
+    if section != "water_tests":
+        return {}
+    updater = provider(hass, "parameters")
+    if updater is None:
+        return {}
+    view = await updater.async_view()
+    return {
+        entry_id: strip_entry("parameter", entry, view)
+        for entry_id, entry in view.get("items", {}).items()
+    }
+
+
 async def _check(
     hass: HomeAssistant, target: _Target, msg: dict[str, Any]
 ) -> tuple[Report, dict[str, bytes]]:
@@ -219,7 +236,12 @@ async def _check(
     files = {name: len(blob) for name, blob in visuals.items()}
     if kind != "task":
         files[DESCRIPTORS[kind]] = len(dump(msg["data"]))
-    context = build_context(target.view, target.section, exclude=(kind, entry_id))
+    context = build_context(
+        target.view,
+        target.section,
+        exclude=(kind, entry_id),
+        parameters=await _parameters(hass, target.section),
+    )
     report = validate_draft(
         kind,
         entry_id,

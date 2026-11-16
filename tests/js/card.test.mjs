@@ -61,9 +61,23 @@ function setup({ language = "en", providers = true } = {}) {
     contributeResult: { submitted: true, number: 7, url: "https://github.com/x/pull/7", appended: false },
   };
   const entries = {
-    "equipment/item": [{ id: "eheim-200", label: "Eheim 200", source: "pack", thumb: "/t.webp", image: "/i.png" }, { id: "mine", label: "Mine", source: "user" }],
+    "equipment/item": [
+      { id: "eheim-200", label: "Eheim 200", source: "pack", thumb: "/t.webp", image: "/i.png", brand: "Eheim", category: "heater" },
+      { id: "eheim-300", label: "Eheim 300", source: "pack", brand: "Eheim", category: "heater" },
+      { id: "tunze-1", label: "Tunze 1", source: "pack", brand: "Tunze", category: "pump" },
+      { id: "mine", label: "Mine", source: "user" },
+    ],
     "equipment/task": [{ id: "clean", label: "Clean", source: "pack" }],
-    "equipment/category": [{ id: "heater", label: "Heater", source: "pack" }],
+    "equipment/category": [{ id: "heater", label: "Heater", source: "pack" }, { id: "pump", label: "Pump", source: "pack" }],
+    "supplements/supplement": [
+      { id: "a-kh", label: "A KH", source: "pack", brand: "Acme" },
+      { id: "a-ca", label: "A Ca", source: "pack", brand: "Acme" },
+      { id: "z-mg", label: "Z Mg", source: "user" },
+    ],
+    "water_tests/water_test": [
+      { id: "rs-kit", label: "Red Sea Kit", source: "pack", brand: "Red Sea" },
+      { id: "rs-nitrate", label: "Red Sea Nitrate", source: "pack", brand: "Red Sea" },
+    ],
   };
   const hass = {
     language,
@@ -74,8 +88,9 @@ function setup({ language = "en", providers = true } = {}) {
       switch (command) {
         case "catalogs":
           return [
-            { section: "equipment", kinds: ["task", "category", "item"], provider: providers ? "maintenance_hub" : null, schemas: true, schema_error: null },
-            { section: "supplements", kinds: ["supplement"], provider: null, schemas: false, schema_error: null },
+            { section: "equipment", kinds: ["item", "category", "task"], provider: providers ? "maintenance_hub" : null, schemas: true, schema_error: null },
+            { section: "supplements", kinds: ["supplement"], provider: providers ? "redsea" : null, schemas: true, schema_error: null },
+            { section: "water_tests", kinds: ["water_test"], provider: providers ? "redsea" : null, schemas: true, schema_error: null },
           ];
         case "entries":
           return entries[`${fields.section}/${fields.kind}`] || [];
@@ -153,10 +168,8 @@ test("lists the entries of a catalog and filters them", async () => {
   const { window, root } = setup();
   await until(() => root.querySelectorAll(".entry").length);
   assert.match(text(root), /Equipment.*Supplements/);
-  assert.match(text(root), /Tasks.*Categories.*Items/);
-  assert.equal(root.querySelectorAll(".entry").length, 0 + 1 && 1);
-  button(root, "Items").click();
-  await until(() => root.querySelectorAll(".entry").length === 2);
+  assert.match(text(root), /Items.*Categories.*Tasks/);
+  assert.equal(root.querySelectorAll(".entry").length, 4);
   assert.match(text(root), /Eheim 200.*catalog/);
   assert.match(text(root), /Mine.*yours/);
   const search = root.querySelector("input[type=search]");
@@ -166,11 +179,63 @@ test("lists the entries of a catalog and filters them", async () => {
   assert.match(text(root), /Nothing here yet/);
 });
 
+test("items are a tree: brand, then category, then equipment, with counts", async () => {
+  const { window, root } = setup();
+  await until(() => root.querySelectorAll("details.group").length);
+  const brands = [...root.querySelectorAll(".list > details.group")];
+  assert.deepEqual(
+    brands.map((b) => b.querySelector(":scope > summary").textContent),
+    ["Eheim (2)", "Tunze (1)", "No brand (1)"],
+  );
+  const eheim = brands[0];
+  assert.deepEqual(
+    [...eheim.querySelectorAll(":scope > details > summary")].map((x) => x.textContent),
+    ["Heater (2)"],
+  );
+  assert.equal(eheim.querySelectorAll("details .entry").length, 2);
+  assert.match(brands[2].textContent, /No category \(1\)/);
+  assert.equal(brands[0].open, false);
+  // A search opens the branches that match
+  const search = root.querySelector("input[type=search]");
+  type(window, search, "tunze");
+  const found = root.querySelectorAll("details.group");
+  assert.equal(found.length, 2);
+  assert.equal([...found].every((d) => d.open), true);
+});
+
+test("supplements are grouped by brand only", async () => {
+  const { root } = setup();
+  await until(() => button(root, "Supplements"));
+  button(root, "Supplements").click();
+  await until(() => text(root).includes("Acme (2)"));
+  const groups = [...root.querySelectorAll("details.group")];
+  assert.deepEqual(groups.map((g) => g.querySelector("summary").textContent), ["Acme (2)", "No brand (1)"]);
+  assert.equal(root.querySelectorAll("details details").length, 0);
+});
+
+test("water tests are grouped by brand", async () => {
+  const { root } = setup();
+  await until(() => button(root, "Water tests"));
+  button(root, "Water tests").click();
+  await until(() => text(root).includes("Red Sea (2)"));
+  const groups = [...root.querySelectorAll("details.group")];
+  assert.deepEqual(groups.map((g) => g.querySelector("summary").textContent), ["Red Sea (2)"]);
+});
+
+test("categories and tasks are flat lists", async () => {
+  const { root } = setup();
+  await until(() => button(root, "Categories"));
+  button(root, "Categories").click();
+  await until(() => root.querySelectorAll(".entry").length === 2);
+  assert.equal(root.querySelectorAll("details.group").length, 0);
+});
+
 test("a catalog nobody reads says so", async () => {
   const { root } = setup({ providers: false });
   await until(() => text(root).includes("No integration reading"));
-  const { root: other } = setup();
+  const { root: other, card } = setup();
   await until(() => other.querySelector(".tabs"));
+  card._s.catalogs[1].provider = null;
   button(other, "Supplements").click();
   await until(() => text(other).includes("No integration reading"));
 });
@@ -301,7 +366,7 @@ test("editing an entry of the catalog, then a refused save", async () => {
   const { window, root, calls, state } = setup();
   await until(() => button(root, "Items"));
   button(root, "Items").click();
-  await until(() => root.querySelectorAll(".entry").length === 2);
+  await until(() => root.querySelectorAll(".entry").length === 4);
   root.querySelectorAll(".entry")[0].click();
   await until(() => text(root).includes("saving it creates your own version"));
   const idInput = root.querySelector(".field input");
@@ -338,8 +403,8 @@ test("own entries can be deleted", async () => {
   const { root, calls } = setup();
   await until(() => button(root, "Items"));
   button(root, "Items").click();
-  await until(() => root.querySelectorAll(".entry").length === 2);
-  root.querySelectorAll(".entry")[1].click();
+  await until(() => root.querySelectorAll(".entry").length === 4);
+  root.querySelectorAll(".entry")[3].click();
   await until(() => button(root, "Delete my copy"));
   button(root, "Delete my copy").click();
   await until(() => last(calls, "delete"));

@@ -22,9 +22,10 @@ from custom_components.reeftech_catalog_editor.const import DOMAIN
 SCHEMAS = Path(__file__).parent / "fixtures" / "schema"
 BASE = "https://github.com/Elwinmage/reeftech-catalog/releases/download"
 KINDS = {
-    "equipment": ("task", "category", "item"),
+    "equipment": ("item", "category", "task"),
     "supplements": ("supplement",),
     "parameters": ("parameter",),
+    "water_tests": ("water_test",),
 }
 
 
@@ -57,7 +58,9 @@ def manifest_of(
     }
 
 
-def serve(aioclient_mock, sections=("equipment", "supplements", "parameters")) -> None:
+def serve(
+    aioclient_mock, sections=("equipment", "supplements", "parameters", "water_tests")
+) -> None:
     """Serve the manifest and the schemas of the sections."""
     aioclient_mock.clear_requests()
     for section in sections:
@@ -142,6 +145,25 @@ SUPPLEMENT = {
 }
 
 
+WATER_TEST = {
+    "brand": "Red Sea",
+    "name": "Kit",
+    "tests": [
+        {
+            "parameter": "kh",
+            "unit": "dkh",
+            "method": "titration",
+            "table": {
+                "amount_unit": "ml",
+                "points": [{"amount": 0.5, "value": 12}, {"amount": 1, "value": 6}],
+            },
+        }
+    ],
+    "verified": True,
+    "source": "manual",
+}
+
+
 @pytest.fixture(autouse=True)
 def auto_enable(enable_custom_integrations, hass: HomeAssistant, tmp_path: Path):
     """Load the integration, with a config folder of its own per test."""
@@ -159,6 +181,7 @@ def providers(hass: HomeAssistant, pack: Path, monkeypatch) -> dict[str, FakeUpd
     monkeypatch.setitem(const.PROVIDERS, "equipment", ("fake",))
     monkeypatch.setitem(const.PROVIDERS, "supplements", ("fake_sup",))
     monkeypatch.setitem(const.PROVIDERS, "parameters", ("fake_par",))
+    monkeypatch.setitem(const.PROVIDERS, "water_tests", ("fake_wt",))
     fakes = {
         "equipment": FakeUpdater("fake", "equipment", pack, equipment_view(pack)),
         "supplements": FakeUpdater(
@@ -179,6 +202,9 @@ def providers(hass: HomeAssistant, pack: Path, monkeypatch) -> dict[str, FakeUpd
                     }
                 }
             },
+        ),
+        "water_tests": FakeUpdater(
+            "fake_wt", "water_tests", pack, {"items": {"rs": {**WATER_TEST}}}
         ),
     }
     registry = hass.data.setdefault(DATA_KEY, {})

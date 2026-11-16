@@ -19,10 +19,14 @@ from .const import PROVIDERS, VIEW_GROUPS, VIEW_KEYS
 
 
 def provider(hass: HomeAssistant, section: str) -> CatalogUpdater | None:
-    """The first loaded integration reading a section, or None."""
+    """The first loaded integration reading a section, or None.
+
+    An integration keeps one catalog: it counts for the section it reads only
+    (redsea reads the supplements, not the parameters).
+    """
     for domain in PROVIDERS[section]:
         updater = get_updater(hass, domain)
-        if updater is not None:
+        if updater is not None and updater.spec.section == section:
             return updater
     return None
 
@@ -55,9 +59,16 @@ def _group(
 
 
 def build_context(
-    view: dict[str, Any], section: str, exclude: tuple[str, str] | None = None
+    view: dict[str, Any],
+    section: str,
+    exclude: tuple[str, str] | None = None,
+    parameters: dict[str, dict[str, Any]] | None = None,
 ) -> Context:
-    """What a draft is checked against; `exclude` leaves out the entry it replaces."""
+    """What a draft is checked against; `exclude` leaves out the entry it replaces.
+
+    `parameters` are the ones of the parameters catalog, which a water test is
+    checked against (empty: the test is not cross-checked).
+    """
     if section == "equipment":
         return Context(
             tasks=_group(view, "task", exclude),
@@ -65,6 +76,11 @@ def build_context(
         )
     if section == "supplements":
         return Context(supplements=_group(view, "supplement", exclude))
+    if section == "water_tests":
+        return Context(
+            water_tests=_group(view, "water_test", exclude),
+            parameters=dict(parameters or {}),
+        )
     return Context(parameters=_group(view, "parameter", exclude))
 
 
@@ -72,6 +88,8 @@ def entry_label(kind: str, entry_id: str, data: dict[str, Any]) -> str:
     """A name to show for an entry."""
     if kind == "supplement":
         return str(data.get("fullname") or entry_id)
+    if kind == "water_test":
+        return f"{data.get('brand', '')} {data.get('name', '')}".strip() or entry_id
     name = data.get("name")
     if isinstance(name, dict) and name.get("en"):
         return str(name["en"])
@@ -87,6 +105,8 @@ def list_entries(view: dict[str, Any], kind: str) -> list[dict[str, Any]]:
             "id": entry_id,
             "label": entry_label(kind, entry_id, entry),
             "source": entry.get("source"),
+            "brand": entry.get("brand"),
+            "category": entry.get("category"),
             "image": entry.get("image"),
             "thumb": entry.get("thumb"),
         }

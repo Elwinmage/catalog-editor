@@ -68,6 +68,21 @@ def test_task_and_category_forms():
     assert fields(category)["maintenance"]["item"]["fields"][0]["ref"] == "tasks"
 
 
+def test_water_test_form():
+    water = fields(form("water_test"))
+    assert water["verified"]["required"] is True
+    tests = {f["name"]: f for f in water["tests"]["item"]["fields"]}
+    assert tests["method"]["type"] == "enum"
+    assert tests["method"]["options"] == ["direct", "titration"]
+    table = {f["name"]: f for f in tests["table"]["fields"]}
+    assert table["points"]["type"] == "list"
+    point = {f["name"] for f in table["points"]["item"]["fields"]}
+    assert point == {"amount", "value"}
+    assert forms.suggest_id(
+        "water_test", {"brand": "Red Sea", "name": "Kit"}, set()
+    ) == ("red-sea-kit")
+
+
 def test_supplement_form():
     supplement = fields(form("supplement"))
     assert (

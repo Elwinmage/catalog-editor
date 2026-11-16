@@ -48,10 +48,15 @@ async def editor(hass, aioclient_mock, providers, hass_ws_client):
 
 async def test_catalogs(editor, hass):
     result = (await call(editor, "catalogs"))["result"]
-    assert [c["section"] for c in result] == ["equipment", "supplements", "parameters"]
+    assert [c["section"] for c in result] == [
+        "equipment",
+        "supplements",
+        "parameters",
+        "water_tests",
+    ]
     assert result[0] == {
         "section": "equipment",
-        "kinds": ["task", "category", "item"],
+        "kinds": ["item", "category", "task"],
         "provider": "fake",
         "schemas": True,
         "schema_error": None,
@@ -258,6 +263,29 @@ async def test_override_keeps_the_visual_of_the_catalog(editor, hass):
     assert (folder / "thumb.webp").read_bytes() == b"THUMBDATA"
     entry = (await call(editor, "entry", **base))["result"]
     assert entry["user_copy"] is True
+
+
+async def test_water_tests(editor, hass):
+    from conftest import WATER_TEST
+
+    base = {"section": "water_tests", "kind": "water_test", "entry_id": "rs-2"}
+    ok = await call(editor, "validate", data={**WATER_TEST, "name": "Other"}, **base)
+    assert ok.get("success") is True, ok
+    assert ok["result"]["errors"] == [], ok
+    # Checked against the parameters catalog: the unit must be the one of the parameter
+    bad = {**WATER_TEST, "name": "Other"}
+    bad["tests"] = [{**WATER_TEST["tests"][0], "unit": "ppm"}]
+    found = (await call(editor, "validate", data=bad, **base))["result"]["errors"]
+    assert any("differs from the one of the parameter" in e for e in found)
+    # Same product as an existing one
+    dup = (await call(editor, "validate", data=WATER_TEST, **base))["result"]["errors"]
+    assert any("already 'rs'" in e for e in dup)
+    saved = await call(editor, "save", data={**WATER_TEST, "name": "Other"}, **base)
+    assert saved["result"]["saved"] is True, saved
+    # Without a parameters catalog the test is not cross-checked
+    hass.data["reeftech_catalog"].pop("fake_par")
+    again = await call(editor, "validate", data=bad, **{**base, "entry_id": "rs-3"})
+    assert not any("differs" in e for e in again["result"]["errors"])
 
 
 async def test_other_sections(editor, hass):

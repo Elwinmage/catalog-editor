@@ -66,6 +66,20 @@ def test_strip_entry_and_context(tmp_path):
     )
 
 
+def test_water_test_context_and_label():
+    view = {"items": {"a": {"brand": "B", "name": "K", "image": "x"}}}
+    parameters = {"kh": {"unit": "dkh"}}
+    ctx = context.build_context(view, "water_tests", ("water_test", "z"), parameters)
+    assert ctx.water_tests == {"a": {"brand": "B", "name": "K"}}
+    assert ctx.parameters == parameters
+    assert (
+        context.build_context(view, "water_tests", ("water_test", "a")).water_tests
+        == {}
+    )
+    assert context.entry_label("water_test", "a", {"brand": "B", "name": "K"}) == "B K"
+    assert context.entry_label("water_test", "a", {}) == "a"
+
+
 def test_labels_and_lists(tmp_path):
     view = equipment_view(tmp_path / "pack")
     assert context.entry_label("supplement", "x", {"fullname": "B - KH"}) == "B - KH"
@@ -81,6 +95,8 @@ def test_labels_and_lists(tmp_path):
     assert context.entry_label("item", "e", {}) == "e"
     assert context.entry_label("task", "t", {"name": "bad"}) == "t"
     assert [e["id"] for e in context.list_entries(view, "item")] == ["eheim-200"]
+    listed = context.list_entries(view, "item")[0]
+    assert (listed["brand"], listed["category"]) == ("Eheim", "heater")
     assert context.list_entries(view, "item")[0]["label"] == "Eheim 200"
     assert context.list_entries({}, "item") == []
 
@@ -103,3 +119,16 @@ def test_locate_visual(tmp_path):
         "/fake_catalog/pack/../../etc/passwd",  # leaves the layer
     ):
         assert context.locate_visual(updater, {"image": url}, "image") is None
+
+
+def test_provider_counts_only_for_the_section_it_reads(hass, tmp_path, monkeypatch):
+    from custom_components.reeftech_catalog_editor import const
+    from custom_components.reeftech_catalog_editor.catalog_runtime import DATA_KEY
+
+    view = equipment_view(tmp_path / "pack")
+    supplements = FakeUpdater("redsea", "supplements", tmp_path, view)
+    hass.data[DATA_KEY] = {"redsea": supplements}
+    monkeypatch.setitem(const.PROVIDERS, "parameters", ("reeftank", "redsea"))
+    monkeypatch.setitem(const.PROVIDERS, "supplements", ("redsea",))
+    assert context.provider(hass, "parameters") is None  # redsea reads supplements
+    assert context.provider(hass, "supplements") is supplements

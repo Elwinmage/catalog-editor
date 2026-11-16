@@ -17,15 +17,19 @@
       catalog_equipment: "Equipment",
       catalog_supplements: "Supplements",
       catalog_parameters: "Parameters",
+      catalog_water_tests: "Water tests",
       kind_task: "Tasks",
       kind_category: "Categories",
       kind_item: "Items",
       kind_supplement: "Supplements",
       kind_parameter: "Parameters",
+      kind_water_test: "Water tests",
       new: "New",
       search: "Search…",
       back: "Back",
       empty: "Nothing here yet.",
+      no_brand: "No brand",
+      no_category: "No category",
       no_provider: "No integration reading this catalog is loaded (install maintenance_hub, reef_maintenance, redsea or reeftank).",
       no_schemas: "The schemas of this catalog are not available yet",
       source_pack: "catalog",
@@ -87,15 +91,19 @@
       catalog_equipment: "Équipements",
       catalog_supplements: "Suppléments",
       catalog_parameters: "Paramètres",
+      catalog_water_tests: "Tests d'eau",
       kind_task: "Tâches",
       kind_category: "Catégories",
       kind_item: "Éléments",
       kind_supplement: "Suppléments",
       kind_parameter: "Paramètres",
+      kind_water_test: "Tests d'eau",
       new: "Nouveau",
       search: "Rechercher…",
       back: "Retour",
       empty: "Rien pour l'instant.",
+      no_brand: "Sans marque",
+      no_category: "Sans catégorie",
       no_provider: "Aucune intégration lisant ce catalogue n'est chargée (installez maintenance_hub, reef_maintenance, redsea ou reeftank).",
       no_schemas: "Les schémas de ce catalogue ne sont pas encore disponibles",
       source_pack: "catalogue",
@@ -183,6 +191,10 @@
       border-bottom: 1px solid var(--divider-color); background: none; border-left: 0; border-right: 0; border-top: 0;
       color: inherit; font: inherit; text-align: left; width: 100%;
     }
+    details.group { margin: 2px 0; }
+    details.group > summary { cursor: pointer; padding: 6px 2px; font-weight: 500; }
+    details.group details.group { margin-left: 14px; }
+    details.group .entry { padding-left: 14px; }
     .entry img, .thumb { width: 40px; height: 40px; object-fit: contain; border-radius: 6px; background: var(--secondary-background-color); }
     .thumb.empty { display: inline-block; }
     .sub { color: var(--secondary-text-color); font-size: 0.85em; }
@@ -257,6 +269,8 @@
         busy: false,
       };
       this._refs = {};
+      this._open = new Set();
+      this._catLabels = {};
       this._started = false;
       this._timers = {};
     }
@@ -347,6 +361,10 @@
       const info = (this._s.catalogs || []).find((c) => c.section === section);
       if (info && info.provider) {
         try {
+          if (kind === "item") {
+            const categories = await this.ws("entries", { section, kind: "category" });
+            this._catLabels = Object.fromEntries(categories.map((c) => [c.id, c.label]));
+          }
           this._s.entries = await this.ws("entries", { section, kind });
         } catch (err) {
           this.fail(err);
@@ -440,21 +458,62 @@
     _fillList(list) {
       const s = this._s;
       const needle = s.query.trim().toLowerCase();
-      const shown = s.entries.filter((e) => !needle || `${e.id} ${e.label}`.toLowerCase().includes(needle));
+      const shown = s.entries.filter((e) => !needle || `${e.id} ${e.label} ${e.brand || ""}`.toLowerCase().includes(needle));
       list.replaceChildren();
-      if (!shown.length) list.append(el("div", { class: "sub", text: this.t("empty") }));
-      for (const entry of shown) {
-        const source = entry.source === "user" ? "user" : "pack";
-        list.append(
-          el(
-            "button",
-            { class: "entry", onclick: () => this._edit(entry.id) },
-            entry.thumb ? el("img", { src: entry.thumb, alt: "" }) : el("span", { class: "thumb empty" }),
-            el("span", { class: "grow" }, el("div", { text: entry.label }), el("div", { class: "sub", text: entry.id })),
-            el("span", { class: `badge ${source}`, text: this.t(`source_${source}`) }),
-          ),
-        );
+      if (!shown.length) {
+        list.append(el("div", { class: "sub", text: this.t("empty") }));
+        return;
       }
+      if (s.kind !== "item" && s.kind !== "supplement" && s.kind !== "water_test") {
+        shown.forEach((entry) => list.append(this._entryRow(entry)));
+        return;
+      }
+      // Brand (n) > category (n) > entries for items, brand (n) > entries for supplements and water tests
+      const byBrand = this._group(shown, (e) => e.brand || "");
+      for (const [brand, entries] of byBrand) {
+        const body = [];
+        if (s.kind === "item") {
+          for (const [category, rows] of this._group(entries, (e) => e.category || "", (id) => this._catLabels[id] || id)) {
+            const title = category ? this._catLabels[category] || category : this.t("no_category");
+            body.push(this._branch(`${brand}/${category}`, `${title} (${rows.length})`, rows.map((e) => this._entryRow(e)), needle));
+          }
+        } else {
+          entries.forEach((e) => body.push(this._entryRow(e)));
+        }
+        list.append(this._branch(brand, `${brand || this.t("no_brand")} (${entries.length})`, body, needle));
+      }
+    }
+
+    // Groups by key, sorted by name (labelOf maps a key to the name sorted on); no key goes last
+    _group(entries, keyOf, labelOf = (key) => key) {
+      const groups = new Map();
+      for (const entry of entries) {
+        const key = keyOf(entry);
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(entry);
+      }
+      return [...groups.entries()].sort(([a], [b]) => (a === "") - (b === "") || labelOf(a).localeCompare(labelOf(b), undefined, { sensitivity: "base" }));
+    }
+
+    _branch(key, title, children, forceOpen) {
+      const node = el("details", { class: "group" }, el("summary", { text: title }), children);
+      node.open = Boolean(forceOpen) || this._open.has(key);
+      node.addEventListener("toggle", () => {
+        if (node.open) this._open.add(key);
+        else this._open.delete(key);
+      });
+      return node;
+    }
+
+    _entryRow(entry) {
+      const source = entry.source === "user" ? "user" : "pack";
+      return el(
+        "button",
+        { class: "entry", onclick: () => this._edit(entry.id) },
+        entry.thumb ? el("img", { src: entry.thumb, alt: "" }) : el("span", { class: "thumb empty" }),
+        el("span", { class: "grow" }, el("div", { text: entry.label }), el("div", { class: "sub", text: entry.id })),
+        el("span", { class: `badge ${source}`, text: this.t(`source_${source}`) }),
+      );
     }
 
     // -- the form ------------------------------------------------------------------

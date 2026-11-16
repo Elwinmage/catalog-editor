@@ -22,6 +22,7 @@ ID_FROM: dict[str, tuple[str, ...]] = {
     "item": ("brand", "model"),
     "supplement": ("brand", "name"),
     "parameter": ("symbol",),
+    "water_test": ("brand", "name"),
 }
 
 #: Kinds that have a visual (image.webp and thumb.webp next to the descriptor)
@@ -31,4 +32,5 @@ HAS_VISUAL = {
     "item": True,
     "supplement": True,
     "parameter": True,
+    "water_test": True,
 }

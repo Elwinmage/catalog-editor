@@ -24,6 +24,7 @@ _PACK_KINDS = {
     "item": "item",
     "supplement": "supplement",
     "parameter": "parameter",
+    "water_test": "water_test",
 }
 
 
