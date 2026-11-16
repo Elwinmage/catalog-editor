@@ -45,6 +45,8 @@
       no_alpha: "No transparent background",
       validate_ok: "Everything checks out.",
       errors: "To fix",
+      copy: "Copy",
+      copied: "Copied",
       warnings: "Warnings",
       save: "Save",
       saved: "Saved: usable at once by the integrations.",
@@ -119,6 +121,8 @@
       no_alpha: "Pas de fond transparent",
       validate_ok: "Tout est en règle.",
       errors: "À corriger",
+      copy: "Copier",
+      copied: "Copié",
       warnings: "Avertissements",
       save: "Enregistrer",
       saved: "Enregistré : utilisable tout de suite par les intégrations.",
@@ -217,6 +221,9 @@
     .report .bad { color: var(--error-color); }
     .report .warn { color: var(--warning-color, #ef6c00); }
     .report .good { color: var(--success-color, #43a047); }
+    .msg, .report, .code, .sub, .help, .entry .grow { user-select: text; -webkit-user-select: text; cursor: text; }
+    .msg.error { display: flex; gap: 8px; align-items: flex-start; }
+    .msg.error .grow { flex: 1; }
     .code { font-size: 1.6em; letter-spacing: 0.15em; font-family: monospace; margin: 6px 0; }
     .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; align-items: center; }
     .picture { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
@@ -382,7 +389,14 @@
       root.replaceChildren(el("style", { text: STYLE }));
       const card = el("ha-card", { class: "card" }, el("h2", { text: this._config.title || this.t("title") }));
       if (s.catalogs) card.append(this._renderTabs());
-      if (s.message) card.append(el("div", { class: `msg ${s.message.kind}`, text: s.message.text }));
+      if (s.message) {
+        const text = s.message.text;
+        card.append(
+          s.message.kind === "error"
+            ? el("div", { class: "msg error" }, el("span", { class: "grow", text }), this._copyButton(() => text))
+            : el("div", { class: `msg ${s.message.kind}`, text }),
+        );
+      }
       if (s.catalogs) card.append(s.mode === "form" ? this._renderForm() : this._renderList());
       if (s.catalogs) card.append(this._renderGithub());
       root.append(card);
@@ -1122,6 +1136,27 @@
 
     // -- GitHub --------------------------------------------------------------------
 
+    // A button copying a text; works without a secure context too.
+    _copyButton(getText) {
+      const button = el("button", { class: "btn", text: this.t("copy") });
+      button.onclick = async () => {
+        const text = getText();
+        try {
+          await navigator.clipboard.writeText(text);
+        } catch (err) {
+          const area = document.createElement("textarea");
+          area.value = text;
+          this.shadowRoot.append(area);
+          area.select();
+          document.execCommand("copy");
+          area.remove();
+        }
+        button.textContent = this.t("copied");
+        setTimeout(() => (button.textContent = this.t("copy")), 1500);
+      };
+      return button;
+    }
+
     _renderGithub() {
       const s = this._s;
       const box = el("div", {}, el("h3", { text: this.t("github") }));
@@ -1137,7 +1172,7 @@
       } else if (s.login) {
         box.append(
           el("div", { class: "sub", text: this.t("connect_help") }),
-          el("div", { class: "code", text: s.login.user_code }),
+          el("div", { class: "row" }, el("span", { class: "code grow", text: s.login.user_code }), this._copyButton(() => s.login.user_code)),
           el("a", { href: s.login.verification_uri, target: "_blank", rel: "noopener", text: s.login.verification_uri }),
           el("div", { class: "sub", text: this.t("waiting") }),
         );

@@ -28,6 +28,7 @@ class FakeGithub:
         self.valid = True  # False: every call answers 401
         self.status: int | None = None  # forced answer of every call
         self.forked = False
+        self.can_push = False  # the account may push to the upstream itself
         self.fork_polls = 0  # GETs of the fork answering 404 once requested
         self.fork_kind = "fork"  # or "plain": a repository that is not a fork
         self.blobs: dict[str, bytes] = {}
@@ -75,7 +76,7 @@ class FakeGithub:
         repo, rest = match.group(1), match.group(2) or ""
         fork = f"{self.login}/{UP.split('/')[1]}"
         known = repo == UP or (repo == fork and self.forked)
-        if repo == fork and rest == "" and method == "GET":
+        if repo == fork and repo != UP and rest == "" and method == "GET":
             if self.forked and self.fork_polls <= 0:
                 parent = {"full_name": UP} if self.fork_kind == "fork" else None
                 body = {"fork": self.fork_kind == "fork", "parent": parent}
@@ -85,7 +86,11 @@ class FakeGithub:
         if not known:
             return self.reply(method, url, 404, {"message": "Not Found"})
         if rest == "" and repo == UP:
-            return self.reply(method, url, body={"default_branch": "main"})
+            return self.reply(
+                method,
+                url,
+                body={"default_branch": "main", "permissions": {"push": self.can_push}},
+            )
         if rest == "/forks":
             self.forked = True
             return self.reply(method, url, 202, {})

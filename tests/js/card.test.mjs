@@ -399,6 +399,47 @@ test("an error from the backend is shown", async () => {
   await until(() => text(root).includes("Schemas not downloaded yet"));
 });
 
+test("errors and the GitHub code can be selected and copied", async () => {
+  const { window, root, card } = setup();
+  await until(() => button(root, "Items"));
+  const copied = [];
+  Object.defineProperty(window.navigator, "clipboard", { value: { writeText: async (t) => copied.push(t) }, configurable: true });
+  card.hass = {
+    ...card.hass,
+    callWS: async (msg) => {
+      if (msg.type.endsWith("github_login")) return { user_code: "ABCD-1234", verification_uri: "https://github.com/login/device", expires_in: 900, interval: 60 };
+      throw new Error("Boom: not a fork");
+    },
+  };
+  button(root, "Items").click();
+  await until(() => text(root).includes("Boom: not a fork"));
+  const error = root.querySelector(".msg.error");
+  button(error, "Copy").click();
+  await until(() => copied.length === 1);
+  assert.equal(copied[0], "Boom: not a fork");
+  await until(() => button(error, "Copied"));
+
+  // The device code has its own button
+  button(root, "Connect to GitHub").click();
+  await until(() => root.querySelector(".code"));
+  const row = root.querySelector(".code").parentElement;
+  button(row, "Copy").click();
+  await until(() => copied.length === 2);
+  assert.equal(copied[1], "ABCD-1234");
+
+  // Without a clipboard (not a secure context) the old way is used
+  Object.defineProperty(window.navigator, "clipboard", { value: undefined, configurable: true });
+  const commands = [];
+  window.document.execCommand = (name) => commands.push(name);
+  button(row, "Copy").click();
+  await until(() => commands.length === 1);
+  assert.deepEqual(commands, ["copy"]);
+
+  // The styles do not forbid the selection
+  const css = [...root.querySelectorAll("style")].map((n) => n.textContent).join("");
+  assert.match(css, /\.msg, \.report, \.code[^}]*user-select: text/);
+});
+
 test("own entries can be deleted", async () => {
   const { root, calls } = setup();
   await until(() => button(root, "Items"));

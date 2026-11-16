@@ -184,7 +184,14 @@ class GithubClient:
         return (await self._call("GET", "/user"))["login"]
 
     async def ensure_fork(self, login: str) -> str:
-        """`login/name` of the fork of the catalog, made when it is missing."""
+        """`login/name` of the fork of the catalog, made when it is missing.
+
+        An account allowed to push to the catalog itself (its owner, a
+        collaborator) cannot fork it: the catalog is then used directly.
+        """
+        upstream = await self._call("GET", f"/repos/{self.upstream}")
+        if (upstream.get("permissions") or {}).get("push"):
+            return self.upstream
         fork = f"{login}/{self.repo_name}"
         found = await self._call("GET", f"/repos/{fork}", missing_ok=True)
         if found is None:

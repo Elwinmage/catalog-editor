@@ -19,6 +19,7 @@ from custom_components.reeftech_catalog_editor.storage import dump
 
 ITEM = {"category": "heater", "brand": "Acme", "model": "X1"}
 FORK = "elwin/reeftech-catalog"
+UP = "Elwinmage/reeftech-catalog"
 
 
 @pytest.fixture(autouse=True)
@@ -83,6 +84,41 @@ async def test_new_entry_makes_a_fork_a_branch_and_a_pull(hass, aioclient_mock):
     assert request["title"] == "Add item acme-x1" and request["base"] == "main"
     assert request["head"] == f"elwin:{pull.branch}" and "CC BY 4.0" in request["body"]
     assert pull.branch.startswith("editor/item-acme-x1-")
+
+
+async def test_an_account_that_can_push_uses_the_catalog_itself(hass, aioclient_mock):
+    fake = FakeGithub(aioclient_mock)
+    fake.can_push = True
+    fake.login = owner = "elwinmage"
+    pull, _, appended = await contribution.contribute(
+        client_of(hass),
+        owner,
+        previous=None,
+        kind="item",
+        entry_id="acme-x1",
+        label="Acme X1",
+        data=ITEM,
+        visuals={},
+    )
+    assert appended is False
+    assert ("POST", f"/repos/{UP}/forks") not in fake.calls
+    assert fake.files(UP, pull.branch)["equipment/items/acme-x1/item.json"] == dump(
+        ITEM
+    )
+    assert fake.refs[(UP, "main")] != fake.refs[(UP, pull.branch)]  # main is untouched
+    assert fake.pulls[pull.number]["request"]["head"] == f"{owner}:{pull.branch}"
+    # A second save adds a commit to the same branch of the catalog
+    again = await contribution.contribute(
+        client_of(hass),
+        owner,
+        previous={"number": pull.number, "update": False},
+        kind="item",
+        entry_id="acme-x1",
+        label="Acme X1",
+        data={**ITEM, "model": "X2"},
+        visuals={},
+    )
+    assert again[2] is True
 
 
 async def test_update_replaces_the_visual_and_deletes_the_old_one(hass, aioclient_mock):

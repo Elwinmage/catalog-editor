@@ -148,6 +148,10 @@ async def test_fork(hass, aioclient_mock):
         await client.ensure_fork("elwin")
     assert conflict.value.code == "fork_conflict"
 
+    # An account allowed to push to the catalog cannot fork it: no fork at all
+    fake.can_push = True
+    assert await client.ensure_fork("Elwinmage") == UP
+
 
 async def test_fork_never_ready(hass, aioclient_mock, monkeypatch):
     fake = FakeGithub(aioclient_mock)
