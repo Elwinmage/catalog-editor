@@ -26,15 +26,8 @@ VIEW_GROUPS = {
     "water_test": "items",
 }
 
-#: Integrations reading each section; the first one loaded provides the merged
-#: view the editor shows and checks drafts against (maintenance_hub keeps every
-#: scope, reef_maintenance only the aquarium ones).
-PROVIDERS: dict[str, tuple[str, ...]] = {
-    "equipment": ("maintenance_hub", "reef_maintenance"),
-    "supplements": ("redsea",),
-    "parameters": ("reeftank", "redsea"),
-    "water_tests": ("redsea", "reeftank"),
-}
+#: Where the visuals of the user layer are served: <url>/<section>/...
+USER_URL = f"/{DOMAIN}/user"
 
 #: Keys the merged view adds to an entry; never part of its descriptor
 VIEW_KEYS = ("image", "thumb", "source")

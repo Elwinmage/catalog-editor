@@ -14,9 +14,7 @@ import pytest
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.reeftech_catalog_editor import const
 from custom_components.reeftech_catalog_editor.catalog_pack import Layer
-from custom_components.reeftech_catalog_editor.catalog_runtime import DATA_KEY
 from custom_components.reeftech_catalog_editor.const import DOMAIN
 
 SCHEMAS = Path(__file__).parent / "fixtures" / "schema"
@@ -81,24 +79,40 @@ def interval(default: int = 1) -> dict[str, Any]:
 
 
 @dataclass
-class Spec:
-    domain: str
-    section: str
+class FakePack:
+    installed: object | None = None
+    last_error: str | None = None
 
 
-class FakeUpdater:
-    """What the editor needs from a consumer of the catalog."""
+class FakeSource:
+    """What the editor needs of the merged catalog of a section."""
 
-    def __init__(self, domain: str, section: str, root: Path, view: dict) -> None:
-        self.spec = Spec(domain, section)
+    def __init__(self, name: str, section: str, root: Path, view: dict) -> None:
+        self.section = section
         self.view = view
         self.root = root
+        self.name = name
+        self.user_revision = 0
+        self.pack = FakePack(installed=object())
+        self.real: Any = None  # the real source this one replaces, still to stop
+
+    def async_stop(self) -> None:
+        """Give back the packs held by the real source standing behind."""
+        if self.real is not None:
+            self.real.async_stop()
+
+    @property
+    def installed(self):
+        return self.pack.installed
 
     async def async_view(self, refresh: bool = False) -> dict[str, Any]:
         return self.view
 
-    def _layers(self) -> list[Layer]:
-        return [Layer("pack", self.root, f"/{self.spec.domain}_catalog/pack", "1")]
+    async def async_reload(self) -> None:
+        """Nothing to read again: the view is a given."""
+
+    def layers(self) -> list[Layer]:
+        return [Layer("pack", self.root, f"/{self.name}_catalog/pack", "1")]
 
 
 def equipment_view(pack: Path) -> dict[str, Any]:
@@ -172,22 +186,19 @@ def auto_enable(enable_custom_integrations, hass: HomeAssistant, tmp_path: Path)
 
 @pytest.fixture
 def pack(tmp_path: Path) -> Path:
+    """Where the fake sources read their pack (and the tests drop released copies)."""
     return tmp_path / "pack"
 
 
 @pytest.fixture
-def providers(hass: HomeAssistant, pack: Path, monkeypatch) -> dict[str, FakeUpdater]:
-    """A fake integration reading each section (registered like the real ones)."""
-    monkeypatch.setitem(const.PROVIDERS, "equipment", ("fake",))
-    monkeypatch.setitem(const.PROVIDERS, "supplements", ("fake_sup",))
-    monkeypatch.setitem(const.PROVIDERS, "parameters", ("fake_par",))
-    monkeypatch.setitem(const.PROVIDERS, "water_tests", ("fake_wt",))
+def providers(hass: HomeAssistant, pack: Path, monkeypatch) -> dict[str, FakeSource]:
+    """A fake merged catalog for each section, put in the editor once it is set up."""
     fakes = {
-        "equipment": FakeUpdater("fake", "equipment", pack, equipment_view(pack)),
-        "supplements": FakeUpdater(
+        "equipment": FakeSource("fake", "equipment", pack, equipment_view(pack)),
+        "supplements": FakeSource(
             "fake_sup", "supplements", pack, {"items": {"kh": {**SUPPLEMENT}}}
         ),
-        "parameters": FakeUpdater(
+        "parameters": FakeSource(
             "fake_par",
             "parameters",
             pack,
@@ -203,13 +214,11 @@ def providers(hass: HomeAssistant, pack: Path, monkeypatch) -> dict[str, FakeUpd
                 }
             },
         ),
-        "water_tests": FakeUpdater(
+        "water_tests": FakeSource(
             "fake_wt", "water_tests", pack, {"items": {"rs": {**WATER_TEST}}}
         ),
     }
-    registry = hass.data.setdefault(DATA_KEY, {})
-    for fake in fakes.values():
-        registry[fake.spec.domain] = fake
+    hass.data["_test_fakes"] = fakes
     return fakes
 
 
@@ -220,4 +229,9 @@ async def setup_editor(hass: HomeAssistant, aioclient_mock, release: bool = True
     entry.add_to_hass(hass)
     await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done(wait_background_tasks=True)
+    # Fakes stand in for the real sources, which are tested on their own
+    sources = hass.data[DOMAIN].sources
+    for section, fake in hass.data.get("_test_fakes", {}).items():
+        fake.real = sources.get(section)
+        sources[section] = fake
     return entry

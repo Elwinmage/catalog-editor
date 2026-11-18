@@ -46,7 +46,9 @@ async def editor(hass, aioclient_mock, providers, hass_ws_client):
     return await hass_ws_client(hass)
 
 
-async def test_catalogs(editor, hass):
+async def test_catalogs(hass, aioclient_mock, hass_ws_client):
+    await setup_editor(hass, aioclient_mock)
+    editor = await hass_ws_client(hass)
     result = (await call(editor, "catalogs"))["result"]
     assert [c["section"] for c in result] == [
         "equipment",
@@ -54,15 +56,19 @@ async def test_catalogs(editor, hass):
         "parameters",
         "water_tests",
     ]
+    # The packs are the real ones, downloaded (an empty release is served)
     assert result[0] == {
         "section": "equipment",
         "kinds": ["item", "category", "task"],
-        "provider": "fake",
+        "installed": "2026.11.0",
+        "latest": "2026.11.0",
+        "update_available": False,
+        "in_progress": False,
+        "progress": None,
+        "error": None,
         "schemas": True,
         "schema_error": None,
     }
-    hass.data["reeftech_catalog"].pop("fake_par")
-    assert (await call(editor, "catalogs"))["result"][2]["provider"] is None
 
 
 async def test_form_entries_entry(editor):
@@ -97,11 +103,14 @@ async def test_form_entries_entry(editor):
 async def test_refusals(editor, hass, aioclient_mock):
     wrong = await call(editor, "form", section="supplements", kind="item")
     assert wrong["error"]["code"] == "invalid_format"
-    hass.data["reeftech_catalog"].pop("fake_sup")
+    hass.data[T].sources["supplements"].pack.installed = None
+    hass.data[T].sources["supplements"].pack.last_error = "HTTP 404"
     none = await call(editor, "form", section="supplements", kind="supplement")
-    assert none["error"]["code"] == "no_provider"
-    hass.data["reeftech_catalog"]["fake_sup"] = object()  # restored below
-    hass.data["reeftech_catalog"].pop("fake_sup")
+    assert none["error"]["code"] == "not_installed"
+    assert none["error"]["message"] == "HTTP 404"
+    hass.data[T].sources["supplements"].pack.last_error = None
+    never = await call(editor, "form", section="supplements", kind="supplement")
+    assert "not downloaded yet" in never["error"]["message"]
 
     # Schemas never downloaded and the release unreachable
     hass.data[T].schemas.validators.pop("parameters")
@@ -283,7 +292,7 @@ async def test_water_tests(editor, hass):
     saved = await call(editor, "save", data={**WATER_TEST, "name": "Other"}, **base)
     assert saved["result"]["saved"] is True, saved
     # Without a parameters catalog the test is not cross-checked
-    hass.data["reeftech_catalog"].pop("fake_par")
+    hass.data[T].sources["parameters"].pack.installed = None
     again = await call(editor, "validate", data=bad, **{**base, "entry_id": "rs-3"})
     assert not any("differs" in e for e in again["result"]["errors"])
 
@@ -485,13 +494,13 @@ async def test_contribute_refusals(editor, hass, hass_client, gh):
 
     # An entry that was valid when saved but is not any more (its category went)
     await save_item(editor, hass_client)
-    hass.data["reeftech_catalog"]["fake"].view["categories"].pop("heater")
+    hass.data[T].sources["equipment"].view["categories"].pop("heater")
     refused = (await call(editor, "contribute", attest=True, **BASE))["result"]
     assert refused["submitted"] is False and refused["errors"]
     assert gh.pulls == {}
 
     gh.valid = False  # the token was revoked
-    hass.data["reeftech_catalog"]["fake"].view["categories"]["heater"] = {
+    hass.data[T].sources["equipment"].view["categories"]["heater"] = {
         "name": {"en": "Heater"},
         "scopes": ["aquarium"],
     }
@@ -571,12 +580,14 @@ async def test_contributions_edge_cases(editor, hass, hass_client, gh, pack):
     assert (await call(editor, "contributions"))["result"][0]["state"] == "open"
     assert hass.data[T].contributions.token is None
 
-    # Merged while no integration reads the section, then once the copy is gone
+    # Merged while the pack of the section is not downloaded, then once the copy is gone
     item = hass.data[T].contributions.items[0]
     item["state"] = "merged"
-    saved_providers = hass.data["reeftech_catalog"].pop("fake")
+    source = hass.data[T].sources["equipment"]
+    saved_pack = source.pack.installed
+    source.pack.installed = None
     assert (await call(editor, "contributions"))["result"][0]["released"] is False
-    hass.data["reeftech_catalog"]["fake"] = saved_providers
+    source.pack.installed = saved_pack
     await hass.async_add_executor_job(
         hass.data[T].catalog.delete, "equipment", "item", "acme-x1"
     )

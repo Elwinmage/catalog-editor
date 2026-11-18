@@ -23,7 +23,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.http import HomeAssistantView
 
 from .catalog_rules import DESCRIPTORS, Report, validate_draft
-from .catalog_runtime import SIGNAL_USER_CATALOG_CHANGED, CatalogUpdater
+from .catalog_runtime import SIGNAL_USER_CATALOG_CHANGED
 from .compat import vol
 from .const import DOMAIN, MAX_UPLOADS, SECTION_KINDS, UPLOAD_TTL_S, VIEW_GROUPS
 from .context import (
@@ -31,7 +31,6 @@ from .context import (
     entry_label,
     list_entries,
     locate_visual,
-    provider,
     strip_entry,
 )
 from .contribute import contribute
@@ -46,6 +45,7 @@ from .github import (
 from .hints import HAS_VISUAL
 from .images import MAX_UPLOAD_BYTES, ImageError, Visual, process_image
 from .schemas import SchemaStore
+from .source import SectionSource
 from .storage import UserCatalog, dump
 
 ALL_KINDS = sorted({kind for kinds in SECTION_KINDS.values() for kind in kinds})
@@ -75,6 +75,8 @@ class EditorData:
     login: tuple[str, float, int] | None = None
     #: token -> (processed picture, expiry on the monotonic clock)
     uploads: dict[str, tuple[Visual, float]] = field(default_factory=dict)
+    #: The merged catalog of each section (shared pack + user layer)
+    sources: dict[str, SectionSource] = field(default_factory=dict)
 
     def prune(self) -> None:
         """Forget expired uploads, then the oldest ones above the limit."""
@@ -107,7 +109,7 @@ class _Refused(Exception):
 @dataclass
 class _Target:
     data: EditorData
-    updater: CatalogUpdater
+    source: SectionSource
     section: str
     kind: str
     view: dict[str, Any]
@@ -122,10 +124,11 @@ async def _target(
     section, kind = msg["section"], msg["kind"]
     if kind not in SECTION_KINDS[section]:
         raise _Refused("invalid_format", f"{section} has no {kind}")
-    updater = provider(hass, section)
-    if updater is None:
+    source = data.sources[section]
+    if source.installed is None:
         raise _Refused(
-            "no_provider", f"No integration reading the {section} catalog is loaded"
+            "not_installed",
+            source.pack.last_error or f"The {section} catalog is not downloaded yet",
         )
     if need_schemas and not data.schemas.ready(section):
         await data.schemas.async_refresh(section)
@@ -134,7 +137,7 @@ async def _target(
                 "schemas_unavailable",
                 data.schemas.errors.get(section, "Schemas not downloaded yet"),
             )
-    return _Target(data, updater, section, kind, await updater.async_view())
+    return _Target(data, source, section, kind, await source.async_view())
 
 
 def _command(schema: dict[Any, Any], name: str):
@@ -190,7 +193,7 @@ async def _visuals(
         entry = target.view.get(VIEW_GROUPS[target.kind], {}).get(msg["entry_id"])
         found: dict[str, bytes] = {}
         for key, default in (("image", "image.webp"), ("thumb", "thumb.webp")):
-            path = locate_visual(target.updater, entry, key) if entry else None
+            path = locate_visual(target.source, entry, key) if entry else None
             if path is not None:
                 name = default if key == "thumb" else path.name
                 found[name] = path.read_bytes()
@@ -210,17 +213,17 @@ def _check_id(target: _Target, entry_id: str, report: Report) -> None:
         )
 
 
-async def _parameters(hass: HomeAssistant, section: str) -> dict[str, dict[str, Any]]:
+async def _parameters(data: EditorData, section: str) -> dict[str, dict[str, Any]]:
     """The parameters a water test refers to, from the parameters catalog.
 
-    Empty when no integration provides them (the test is then not cross-checked).
+    Empty when that catalog is not downloaded (the test is then not cross-checked).
     """
     if section != "water_tests":
         return {}
-    updater = provider(hass, "parameters")
-    if updater is None:
+    source = data.sources["parameters"]
+    if source.installed is None:
         return {}
-    view = await updater.async_view()
+    view = await source.async_view()
     return {
         entry_id: strip_entry("parameter", entry, view)
         for entry_id, entry in view.get("items", {}).items()
@@ -240,7 +243,7 @@ async def _check(
         target.view,
         target.section,
         exclude=(kind, entry_id),
-        parameters=await _parameters(hass, target.section),
+        parameters=await _parameters(target.data, target.section),
     )
     report = validate_draft(
         kind,
@@ -260,6 +263,13 @@ async def _check(
     return report, visuals
 
 
+async def _user_changed(hass: HomeAssistant, source: SectionSource) -> None:
+    """The user layer changed: reload the editor's view, tell the integrations."""
+    source.user_revision += 1
+    await source.async_reload()
+    async_dispatcher_send(hass, SIGNAL_USER_CATALOG_CHANGED, source.section)
+
+
 def _report(report: Report) -> dict[str, list[str]]:
     return {"errors": report.errors, "warnings": report.warnings}
 
@@ -267,25 +277,51 @@ def _report(report: Report) -> dict[str, list[str]]:
 # -- commands ---------------------------------------------------------------------
 
 
-@_command({}, "catalogs")
-async def ws_catalogs(hass: HomeAssistant, msg: dict[str, Any]) -> list[dict[str, Any]]:
-    """The sections: which integration provides each, and whether it is editable."""
-    data = _data(hass)
-    if data is None:
-        raise _Refused("not_loaded", "The editor is not loaded")
+def _catalogs(data: EditorData) -> list[dict[str, Any]]:
+    """The state of each section: the pack downloaded, the release, the schemas."""
     result = []
     for section, kinds in SECTION_KINDS.items():
-        updater = provider(hass, section)
+        pack = data.sources[section].pack
         result.append(
             {
                 "section": section,
                 "kinds": list(kinds),
-                "provider": updater.spec.domain if updater else None,
+                "installed": pack.installed.version if pack.installed else None,
+                "latest": pack.latest.version if pack.latest else None,
+                "update_available": pack.update_available,
+                "in_progress": pack.in_progress,
+                "progress": pack.progress,
+                "error": pack.last_error,
                 "schemas": data.schemas.ready(section),
                 "schema_error": data.schemas.errors.get(section),
             }
         )
     return result
+
+
+@_command({}, "catalogs")
+async def ws_catalogs(hass: HomeAssistant, msg: dict[str, Any]) -> list[dict[str, Any]]:
+    """The sections: which release of each is downloaded, and whether it is editable."""
+    return _catalogs(_editor(hass))
+
+
+@_command({vol.Optional("section"): vol.In(list(SECTION_KINDS))}, "refresh")
+async def ws_refresh(hass: HomeAssistant, msg: dict[str, Any]) -> list[dict[str, Any]]:
+    """Check the releases now, install the new ones (and download a missing one).
+
+    A section, or all of them. Every integration reading the catalog gets the new
+    pack too (it is shared). A failure is reported in the `error` of the section.
+    """
+    data = _editor(hass)
+    sections = [msg["section"]] if "section" in msg else list(SECTION_KINDS)
+    for section in sections:
+        source = data.sources[section]
+        await source.pack.async_check(force=True)
+        await data.schemas.async_refresh(section)
+        await source.async_reload()
+    # What reached the catalog no longer needs its local copy
+    await _retire_merged(hass, data)
+    return _catalogs(data)
 
 
 @_command(_TARGET, "form")
@@ -356,7 +392,7 @@ async def ws_save(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
         visuals,
     )
     target.data.uploads.pop(msg.get("visual", ""), None)
-    async_dispatcher_send(hass, SIGNAL_USER_CATALOG_CHANGED, target.section)
+    await _user_changed(hass, target.source)
     return {"saved": True, "id": entry_id, **_report(report)}
 
 
@@ -369,7 +405,7 @@ async def ws_delete(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, bool]
     )
     if not removed:
         raise _Refused("not_found", f"No entry of yours: {target.kind} {msg['id']!r}")
-    async_dispatcher_send(hass, SIGNAL_USER_CATALOG_CHANGED, target.section)
+    await _user_changed(hass, target.source)
     return {"deleted": True}
 
 
@@ -514,7 +550,7 @@ async def ws_contribute(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, A
     }
 
 
-def _released(data: EditorData, updater: CatalogUpdater, item: dict[str, Any]) -> bool:
+def _released(data: EditorData, source: SectionSource, item: dict[str, Any]) -> bool:
     """The catalog the integrations run has the entry, as the user has it."""
     section, kind, entry_id = item["section"], item["kind"], item["id"]
     if not data.catalog.has(section, kind, entry_id):
@@ -524,8 +560,8 @@ def _released(data: EditorData, updater: CatalogUpdater, item: dict[str, Any]) -
     if kind != "task":
         relative /= DESCRIPTORS[kind]
     mine = (data.catalog.root(section) / relative).read_bytes()
-    for layer in updater._layers():
-        if layer.name in ("builtin", "pack"):
+    for layer in source.layers():
+        if layer.name == "pack":
             theirs = layer.root / relative
             if theirs.is_file() and theirs.read_bytes() == mine:
                 return True
@@ -533,16 +569,24 @@ def _released(data: EditorData, updater: CatalogUpdater, item: dict[str, Any]) -
 
 
 async def _retire(hass: HomeAssistant, data: EditorData, item: dict[str, Any]) -> None:
-    """Once a merged entry reached the integrations, the local copy is redundant."""
-    updater = provider(hass, item["section"])
-    if updater is None:
+    """Once a merged entry reached the catalog, the local copy is redundant."""
+    source = data.sources[item["section"]]
+    if source.installed is None:
         return
-    if await hass.async_add_executor_job(_released, data, updater, item):
+    if await hass.async_add_executor_job(_released, data, source, item):
         await hass.async_add_executor_job(
             data.catalog.delete, item["section"], item["kind"], item["id"]
         )
         item["released"] = True
-        async_dispatcher_send(hass, SIGNAL_USER_CATALOG_CHANGED, item["section"])
+        await _user_changed(hass, source)
+
+
+async def _retire_merged(hass: HomeAssistant, data: EditorData) -> None:
+    """Retire the local copy of every merged entry the catalog has now."""
+    for item in data.contributions.items:
+        if item["state"] == "merged" and not item.get("released"):
+            await _retire(hass, data, item)
+    await data.contributions.async_save()
 
 
 @_command({}, "contributions")
@@ -560,10 +604,7 @@ async def ws_contributions(
                     item["state"] = (await client.pull(item["number"])).state
         except GithubError as err:
             await _signed_out(data, err)  # offline or refused: the last state stays
-    for item in store.items:
-        if item["state"] == "merged" and not item.get("released"):
-            await _retire(hass, data, item)
-    await store.async_save()
+    await _retire_merged(hass, data)
     return store.items
 
 
@@ -614,6 +655,7 @@ def async_register_api(hass: HomeAssistant) -> None:
     hass.data[f"{DOMAIN}_api"] = True
     for command in (
         ws_catalogs,
+        ws_refresh,
         ws_form,
         ws_entries,
         ws_entry,

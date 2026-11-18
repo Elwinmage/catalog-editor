@@ -78,6 +78,9 @@ SCHEMA_KIND = "schema"
 #: every integration: <config>/reeftech_catalog/user/<section>/ (section layout)
 SHARED_FOLDER = "reeftech_catalog"
 SHARED_USER_FOLDER = "user"
+#: Folder of the downloaded packs shared by every integration (and the editor):
+#: <config>/reeftech_catalog/pack/<section>/ (section layout, plus manifest.json)
+SHARED_PACK_FOLDER = "pack"
 IMAGE_FILES = ("image.webp", "image.png")
 THUMB_FILE = "thumb.webp"
 ALLOWED_SUFFIXES = (".json", ".webp", ".png")
@@ -144,6 +147,11 @@ class Manifest:
 def shared_user_parts(section: str) -> tuple[str, ...]:
     """Path parts, under the config folder, of the shared user layer of a section."""
     return (SHARED_FOLDER, SHARED_USER_FOLDER, section)
+
+
+def shared_pack_parts(section: str) -> tuple[str, ...]:
+    """Path parts, under the config folder, of the shared downloaded pack of a section."""
+    return (SHARED_FOLDER, SHARED_PACK_FOLDER, section)
 
 
 def _check_version(value: Any, what: str) -> str:
@@ -388,6 +396,24 @@ def commit(root: Path, staging: Path, manifest: Manifest) -> None:
     if root.exists():
         root.rename(old)
     staging.rename(root)
+    shutil.rmtree(old, ignore_errors=True)
+
+
+def copy_pack(src: Path, dest: Path) -> None:
+    """Replace the pack at `dest` by a copy of the pack at `src`.
+
+    Prepared next to `dest` and swapped in one move, like an install: an
+    interruption leaves the previous `dest` untouched.
+    """
+    staging = staging_dir(dest)
+    shutil.rmtree(staging, ignore_errors=True)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(src, staging)
+    old = dest.with_name(dest.name + ".old")
+    shutil.rmtree(old, ignore_errors=True)
+    if dest.exists():
+        dest.rename(old)
+    staging.rename(dest)
     shutil.rmtree(old, ignore_errors=True)
 
 

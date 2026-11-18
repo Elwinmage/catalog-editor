@@ -1,34 +1,18 @@
-"""The merged catalog of the integrations, as the editor sees it.
+"""The merged catalog, as the editor sees it.
 
-The editor never reads the catalog from the network: the integrations that
-consume a section (maintenance_hub, redsea...) keep it up to date and merged
-with the user layers, and the editor asks them. Drafts are checked against that
-view, and entries that come from a release are edited as local overrides.
+The view of a section is the shared pack the editor keeps up to date, merged with
+the user layer (see source.py). Drafts are checked against that view, and
+entries that come from a release are edited as local overrides.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
-from homeassistant.core import HomeAssistant
-
+from .catalog_pack import Layer
 from .catalog_rules import Context
-from .catalog_runtime import CatalogUpdater, get_updater
-from .const import PROVIDERS, VIEW_GROUPS, VIEW_KEYS
-
-
-def provider(hass: HomeAssistant, section: str) -> CatalogUpdater | None:
-    """The first loaded integration reading a section, or None.
-
-    An integration keeps one catalog: it counts for the section it reads only
-    (redsea reads the supplements, not the parameters).
-    """
-    for domain in PROVIDERS[section]:
-        updater = get_updater(hass, domain)
-        if updater is not None and updater.spec.section == section:
-            return updater
-    return None
+from .const import VIEW_GROUPS, VIEW_KEYS
 
 
 def strip_entry(
@@ -114,15 +98,21 @@ def list_entries(view: dict[str, Any], kind: str) -> list[dict[str, Any]]:
     ]
 
 
-def locate_visual(
-    updater: CatalogUpdater, entry: dict[str, Any], key: str
-) -> Path | None:
+class HasLayers(Protocol):
+    """Anything telling which folders a view was read from."""
+
+    def layers(self) -> list[Layer]:
+        """The folders the view is read from, least specific first."""
+        ...
+
+
+def locate_visual(source: HasLayers, entry: dict[str, Any], key: str) -> Path | None:
     """The file behind the `image` or `thumb` URL of an entry of the view."""
     url = entry.get(key)
     if not url:
         return None
     path = str(url).split("?", 1)[0]
-    for layer in updater._layers():  # the folders the view was read from
+    for layer in source.layers():  # the folders the view was read from
         prefix = layer.url + "/"
         if path.startswith(prefix):
             root = layer.root.resolve()

@@ -88,10 +88,12 @@ function setup({ language = "en", providers = true } = {}) {
       switch (command) {
         case "catalogs":
           return [
-            { section: "equipment", kinds: ["item", "category", "task"], provider: providers ? "maintenance_hub" : null, schemas: true, schema_error: null },
-            { section: "supplements", kinds: ["supplement"], provider: providers ? "redsea" : null, schemas: true, schema_error: null },
-            { section: "water_tests", kinds: ["water_test"], provider: providers ? "redsea" : null, schemas: true, schema_error: null },
+            { section: "equipment", kinds: ["item", "category", "task"], installed: providers ? "1.0.0" : null, latest: "1.0.0", update_available: false, in_progress: false, error: null, schemas: true, schema_error: null },
+            { section: "supplements", kinds: ["supplement"], installed: providers ? "1.0.0" : null, latest: "1.0.0", update_available: false, in_progress: false, error: null, schemas: true, schema_error: null },
+            { section: "water_tests", kinds: ["water_test"], installed: providers ? "1.0.0" : null, latest: "1.0.0", update_available: false, in_progress: false, error: null, schemas: true, schema_error: null },
           ];
+        case "refresh":
+          return { refreshed: true };
         case "entries":
           return entries[`${fields.section}/${fields.kind}`] || [];
         case "form":
@@ -230,14 +232,25 @@ test("categories and tasks are flat lists", async () => {
   assert.equal(root.querySelectorAll("details.group").length, 0);
 });
 
-test("a catalog nobody reads says so", async () => {
-  const { root } = setup({ providers: false });
-  await until(() => text(root).includes("No integration reading"));
+test("a catalog not downloaded offers to download it", async () => {
+  const { root, calls, state } = setup({ providers: false });
+  await until(() => text(root).includes("not downloaded yet"));
+  state.downloaded = true;
+  button(root, "Download").click();
+  await until(() => calls.some((c) => c.command === "refresh" && c.section === "equipment"));
   const { root: other, card } = setup();
   await until(() => other.querySelector(".tabs"));
-  card._s.catalogs[1].provider = null;
+  card._s.catalogs[1].installed = null;
   button(other, "Supplements").click();
-  await until(() => text(other).includes("No integration reading"));
+  await until(() => text(other).includes("not downloaded yet"));
+});
+
+test("an installed catalog shows its version and can be refreshed", async () => {
+  const { root, calls, state } = setup();
+  await until(() => text(root).includes("Catalog 1.0.0"));
+  state.latest = "1.1.0";
+  button(root, "Check for updates").click();
+  await until(() => calls.some((c) => c.command === "refresh"));
 });
 
 test("is shown in French", async () => {
@@ -503,6 +516,8 @@ test("signs in to GitHub with the device flow and proposes an entry", async () =
   state.contribs = [
     { number: 3, label: "Acme X1", url: "https://github.com/x/pull/3", kind: "item", id: "acme-x1", state: "merged", released: true },
     { number: 4, label: "Other", url: "https://github.com/x/pull/4", kind: "task", id: "o", state: "open", released: false },
+    { number: 5, label: "Merged", url: "https://github.com/x/pull/5", kind: "task", id: "m", state: "merged", released: false },
+    { number: 6, label: "Refused", url: "https://github.com/x/pull/6", kind: "task", id: "r", state: "closed", released: false },
   ];
   button(root, "Items").click();
   await until(() => button(root, "New"));
@@ -519,8 +534,18 @@ test("signs in to GitHub with the device flow and proposes an entry", async () =
   await until(() => last(calls, "contribute"));
   assert.equal(last(calls, "contribute").attest, true);
   await until(() => text(root).includes("Pull request opened: #7"));
-  assert.match(text(root), /#3 Acme X1.*in the catalog.*merged/);
+  // Open pull requests by default; the other filters show the rest
   assert.match(text(root), /#4 Other.*open/);
+  assert.doesNotMatch(text(root), /#3 Acme|#5 Merged|#6 Refused/);
+  assert.match(text(root), /Open \(1\).*Merged \(1\).*In the catalog \(1\).*All \(4\)/);
+  button(root, "Merged (").click();
+  assert.match(text(root), /#5 Merged/);
+  assert.doesNotMatch(text(root), /#4 Other|#3 Acme/);
+  button(root, "In the catalog (").click();
+  assert.match(text(root), /#3 Acme X1.*in the catalog.*merged/);
+  button(root, "All (").click();
+  assert.match(text(root), /#6 Refused.*closed/);
+  button(root, "Open (").click();
 
   // A new commit into the same pull request
   state.contributeResult = { submitted: true, number: 7, appended: true };

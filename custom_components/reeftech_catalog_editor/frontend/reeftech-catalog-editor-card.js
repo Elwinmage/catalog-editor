@@ -30,7 +30,12 @@
       empty: "Nothing here yet.",
       no_brand: "No brand",
       no_category: "No category",
-      no_provider: "No integration reading this catalog is loaded (install maintenance_hub, reef_maintenance, redsea or reeftank).",
+      not_installed: "This catalog is not downloaded yet.",
+      download: "Download",
+      refresh_catalog: "Check for updates",
+      catalog_version: "Catalog",
+      update_available: "update available",
+      downloading: "Downloading…",
       no_schemas: "The schemas of this catalog are not available yet",
       source_pack: "catalog",
       source_builtin: "catalog",
@@ -71,6 +76,11 @@
       state_open: "open",
       state_merged: "merged",
       state_closed: "closed",
+      filter_open: "Open",
+      filter_merged: "Merged",
+      filter_released: "In the catalog",
+      filter_all: "All",
+      no_contributions: "No pull request in this view.",
       released: "in the catalog",
       add_item: "Add",
       remove: "Remove",
@@ -106,7 +116,12 @@
       empty: "Rien pour l'instant.",
       no_brand: "Sans marque",
       no_category: "Sans catégorie",
-      no_provider: "Aucune intégration lisant ce catalogue n'est chargée (installez maintenance_hub, reef_maintenance, redsea ou reeftank).",
+      not_installed: "Ce catalogue n'est pas encore téléchargé.",
+      download: "Télécharger",
+      refresh_catalog: "Rechercher une mise à jour",
+      catalog_version: "Catalogue",
+      update_available: "mise à jour disponible",
+      downloading: "Téléchargement…",
       no_schemas: "Les schémas de ce catalogue ne sont pas encore disponibles",
       source_pack: "catalogue",
       source_builtin: "catalogue",
@@ -147,6 +162,11 @@
       state_open: "ouverte",
       state_merged: "fusionnée",
       state_closed: "fermée",
+      filter_open: "Ouvertes",
+      filter_merged: "Fusionnées",
+      filter_released: "Dans le catalogue",
+      filter_all: "Toutes",
+      no_contributions: "Aucune pull request dans cette vue.",
       released: "dans le catalogue",
       add_item: "Ajouter",
       remove: "Retirer",
@@ -204,6 +224,7 @@
     .sub { color: var(--secondary-text-color); font-size: 0.85em; }
     .badge { border-radius: 10px; padding: 1px 8px; font-size: 0.75em; border: 1px solid var(--divider-color); color: var(--secondary-text-color); }
     .badge.user, .badge.open { color: var(--primary-color); border-color: var(--primary-color); }
+    .badge.closed { color: var(--error-color); border-color: var(--error-color); }
     .badge.merged { color: var(--success-color, #43a047); border-color: var(--success-color, #43a047); }
     .field { margin: 10px 0; }
     .field > label, .label { display: block; font-weight: 500; margin-bottom: 3px; }
@@ -264,6 +285,7 @@
       this.attachShadow({ mode: "open" });
       this._s = {
         catalogs: null,
+        contribFilter: "open",
         section: null,
         kind: null,
         entries: [],
@@ -342,7 +364,7 @@
       try {
         const [catalogs] = await Promise.all([this.ws("catalogs"), this._githubStatus(false)]);
         this._s.catalogs = catalogs;
-        const first = catalogs.find((c) => c.provider) || catalogs[0];
+        const first = catalogs.find((c) => c.installed) || catalogs[0];
         if (first) await this._openCatalog(first.section, first.kinds[0], false);
       } catch (err) {
         this.fail(err);
@@ -366,7 +388,7 @@
       Object.assign(this._s, { section, kind, mode: "list", query: "", entries: [], message: null });
       this._refs = {};
       const info = (this._s.catalogs || []).find((c) => c.section === section);
-      if (info && info.provider) {
+      if (info && info.installed) {
         try {
           if (kind === "item") {
             const categories = await this.ws("entries", { section, kind: "category" });
@@ -433,16 +455,71 @@
       return wrap;
     }
 
+    // -- catalog download / refresh --------------------------------------------------
+
+    _renderCatalogStatus(info) {
+      const label = `${this.t("catalog_version")} ${info.installed}${info.update_available ? ` — ${this.t("update_available")} (${info.latest})` : ""}`;
+      return el(
+        "div",
+        { class: "row" },
+        el("span", { class: "grow", text: info.in_progress ? this.t("downloading") : label }),
+        el("button", { class: "btn", text: this.t("refresh_catalog"), disabled: !!info.in_progress, onclick: () => this._refreshCatalog(info.section) }),
+      );
+    }
+
+    async _refreshCatalog(section) {
+      const info = (this._s.catalogs || []).find((c) => c.section === section);
+      if (info) info.in_progress = true;
+      this.render();
+      try {
+        await this.ws("refresh", { section });
+        this._s.catalogs = await this.ws("catalogs");
+        const now = this._s.catalogs.find((c) => c.section === section);
+        if (this._s.section === section) await this._openCatalog(section, this._s.kind, false);
+        if (now && now.in_progress) this.later("catalogs", 2000, () => this._pollCatalogs(section));
+      } catch (err) {
+        this._s.message = { kind: "error", text: err.message };
+        try {
+          this._s.catalogs = await this.ws("catalogs");
+        } catch (_) {
+          /* keep the previous state */
+        }
+      }
+      this.render();
+    }
+
+    async _pollCatalogs(section) {
+      try {
+        this._s.catalogs = await this.ws("catalogs");
+        const now = this._s.catalogs.find((c) => c.section === section);
+        if (now && now.in_progress) this.later("catalogs", 2000, () => this._pollCatalogs(section));
+        else if (this._s.section === section) await this._openCatalog(section, this._s.kind, false);
+      } catch (_) {
+        return;
+      }
+      this.render();
+    }
+
     // -- rendering: list -----------------------------------------------------------
 
     _renderList() {
       const s = this._s;
       const info = s.catalogs.find((c) => c.section === s.section);
       const wrap = el("div");
-      if (!info || !info.provider) {
-        wrap.append(el("div", { class: "msg info", text: this.t("no_provider") }));
+      if (!info) return wrap;
+      if (!info.installed) {
+        const text = info.in_progress ? this.t("downloading") : info.error || this.t("not_installed");
+        wrap.append(
+          el(
+            "div",
+            { class: `msg ${info.error ? "error" : "info"}` },
+            el("span", { class: "grow", text }),
+            el("button", { class: "btn primary", text: this.t("download"), disabled: !!info.in_progress, onclick: () => this._refreshCatalog(info.section) }),
+          ),
+        );
         return wrap;
       }
+      wrap.append(this._renderCatalogStatus(info));
       if (!info.schemas) {
         wrap.append(el("div", { class: "msg info", text: `${this.t("no_schemas")}${info.schema_error ? `: ${info.schema_error}` : ""}` }));
       }
@@ -1157,6 +1234,54 @@
       return button;
     }
 
+    // Which pull requests each filter keeps: refused ones (closed) only show in "all".
+    _contribMatches(item, filter) {
+      switch (filter) {
+        case "open":
+          return item.state === "open";
+        case "merged":
+          return item.state === "merged" && !item.released;
+        case "released":
+          return !!item.released;
+        default:
+          return true;
+      }
+    }
+
+    _renderContributions() {
+      const s = this._s;
+      const filters = ["open", "merged", "released", "all"];
+      const tabs = el("div", { class: "tabs" });
+      for (const filter of filters) {
+        const count = s.contribs.filter((item) => this._contribMatches(item, filter)).length;
+        tabs.append(
+          el("button", {
+            class: filter === s.contribFilter ? "on" : "",
+            text: `${this.t(`filter_${filter}`)} (${count})`,
+            onclick: () => {
+              s.contribFilter = filter;
+              this.render();
+            },
+          }),
+        );
+      }
+      const shown = s.contribs.filter((item) => this._contribMatches(item, s.contribFilter));
+      const rows = shown.map((item) =>
+        el(
+          "div",
+          { class: "entry" },
+          el("span", { class: "grow" }, el("a", { href: item.url, target: "_blank", rel: "noopener", text: `#${item.number} ${item.label}` }), el("div", { class: "sub", text: `${item.kind} · ${item.id}` })),
+          item.released ? el("span", { class: "badge merged", text: this.t("released") }) : null,
+          el("span", { class: `badge ${item.state}`, text: this.t(`state_${item.state}`) }),
+        ),
+      );
+      return [
+        el("div", { class: "row" }, el("h3", { class: "grow", text: this.t("contributions") }), el("button", { class: "btn", text: this.t("refresh"), onclick: () => this._githubStatus() })),
+        tabs,
+        rows.length ? el("div", { class: "list" }, rows) : el("div", { class: "sub", text: this.t("no_contributions") }),
+      ];
+    }
+
     _renderGithub() {
       const s = this._s;
       const box = el("div", {}, el("h3", { text: this.t("github") }));
@@ -1179,24 +1304,7 @@
       } else {
         box.append(el("button", { class: "btn", text: this.t("connect"), onclick: () => this._login() }));
       }
-      if (s.contribs.length) {
-        box.append(
-          el("div", { class: "row" }, el("h3", { class: "grow", text: this.t("contributions") }), el("button", { class: "btn", text: this.t("refresh"), onclick: () => this._githubStatus() })),
-          el(
-            "div",
-            { class: "list" },
-            s.contribs.map((item) =>
-              el(
-                "div",
-                { class: "entry" },
-                el("span", { class: "grow" }, el("a", { href: item.url, target: "_blank", rel: "noopener", text: `#${item.number} ${item.label}` }), el("div", { class: "sub", text: `${item.kind} · ${item.id}` })),
-                item.released ? el("span", { class: "badge merged", text: this.t("released") }) : null,
-                el("span", { class: `badge ${item.state}`, text: this.t(`state_${item.state}`) }),
-              ),
-            ),
-          ),
-        );
-      }
+      if (s.contribs.length) box.append(...this._renderContributions());
       return box;
     }
 
