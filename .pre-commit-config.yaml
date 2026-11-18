@@ -17,7 +17,7 @@ repos:
         language: python
         additional_dependencies:
           - pyright
-          - pytest-homeassistant-custom-component
+          - pytest-homeassistant-custom-component>=0.13.375
           - jsonschema>=4.23
           - referencing>=0.35
           - Pillow
@@ -29,7 +29,7 @@ repos:
         entry: pytest -q --cov=custom_components --cov-report=term-missing --cov-report=xml:reports/coverage.xml --cov-report=html:reports/htmlcov --cov-fail-under=100
         language: python
         additional_dependencies:
-          - pytest-homeassistant-custom-component
+          - pytest-homeassistant-custom-component>=0.13.375
           - pytest-cov>=6
           - jsonschema>=4.23
           - referencing>=0.35

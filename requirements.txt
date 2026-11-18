@@ -3,7 +3,8 @@ referencing>=0.35
 Pillow
 pytest>=8
 pytest-cov>=6
-pytest-homeassistant-custom-component
+# Home Assistant with homeassistant.components.http.server (StaticPathConfig)
+pytest-homeassistant-custom-component>=0.13.375
 ruff==0.15.14
 pre-commit
 pyright
