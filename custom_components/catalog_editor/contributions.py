@@ -57,10 +57,19 @@ class Contributions:
                 return item
         return None
 
-    async def async_record(self, item: dict[str, Any]) -> None:
-        """Add a pull request, or replace the one with the same number."""
-        self.items = [i for i in self.items if i["number"] != item["number"]]
-        self.items.insert(0, item)
+    async def async_record(self, *items: dict[str, Any]) -> None:
+        """Add entries of a pull request, or replace the ones already listed.
+
+        An entry is identified by its pull request and its place in the catalog: a
+        batch pull request is listed once per entry it holds.
+        """
+
+        def identity(item: dict[str, Any]) -> tuple[Any, ...]:
+            return (item["number"], item["section"], item["kind"], item["id"])
+
+        news = {identity(item) for item in items}
+        self.items = [i for i in self.items if identity(i) not in news]
+        self.items[0:0] = items
         del self.items[MAX_ITEMS:]
         await self._async_save()
 

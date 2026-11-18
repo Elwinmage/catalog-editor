@@ -33,11 +33,21 @@ everybody, and an update is seen by all.
 
 ### The GitHub OAuth App
 
-*GitHub → Settings → Developer settings → OAuth Apps → New OAuth App*, tick
-**Enable Device Flow**; the callback URL is not used (put any URL). The editor
-asks for the `public_repo` scope only: it forks the catalog, pushes a branch of
-the fork and opens the pull request. The token stays in Home Assistant's storage
-(`.storage/catalog_editor`).
+Only needed to propose entries to the catalog (editing locally works without).
+Create the app in a minute:
+
+1. Open <https://github.com/settings/applications/new> (sign in to GitHub).
+2. *Application name*: anything (e.g. `Catalog editor`). *Homepage URL* and
+   *Authorization callback URL*: any address, e.g.
+   `https://github.com/Elwinmage/reeftech-catalog`; they are not used.
+3. Tick **Enable Device Flow**, then **Register application**.
+4. Copy the **Client ID** of the next page (no secret needed) into the
+   integration (at setup, or later by removing and adding it again).
+
+Then *Connect to GitHub* in the card: you get a code to type on a GitHub page.
+The editor asks for the `public_repo` scope only: it forks the catalog, pushes a
+branch of the fork and opens the pull request. The token stays in Home Assistant's
+storage (`.storage/catalog_editor`).
 
 ## How it works
 

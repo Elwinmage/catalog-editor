@@ -25,6 +25,10 @@ ID_FROM: dict[str, tuple[str, ...]] = {
     "water_test": ("brand", "name"),
 }
 
+#: Field holding the brand of the kinds that have one: chosen among the brands
+#: of the catalogs (a brand keeps its spelling), or a new one
+BRAND_FIELD = {"item": "brand", "supplement": "brand", "water_test": "brand"}
+
 #: Kinds that have a visual (image.webp and thumb.webp next to the descriptor)
 HAS_VISUAL = {
     "task": False,

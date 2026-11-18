@@ -57,6 +57,26 @@ class UserCatalog:
             path.is_file() if kind == "task" else (path / DESCRIPTORS[kind]).is_file()
         )
 
+    def entries(self, section: str, kinds: tuple[str, ...]) -> list[tuple[str, str]]:
+        """The (kind, id) of every entry of the user in a section (`kinds`: its own)."""
+        found = []
+        for kind in kinds:
+            base = self.path_of(section, kind, "x").parent
+            if not base.is_dir():
+                continue
+            if kind == "task":
+                ids = [
+                    p.stem for p in base.glob("*.json") if not p.name.startswith(".")
+                ]
+            else:
+                ids = [
+                    p.name
+                    for p in base.iterdir()
+                    if p.is_dir() and not p.name.startswith(".")
+                ]
+            found += [(kind, i) for i in sorted(ids) if self.has(section, kind, i)]
+        return found
+
     def read(self, section: str, kind: str, entry_id: str) -> dict[str, Any]:
         """The descriptor of an entry of the user."""
         path = self.path_of(section, kind, entry_id)

@@ -17,7 +17,7 @@ const FORM = {
   id_from: ["brand", "model"],
   fields: [
     { name: "category", required: true, type: "ref", ref: "categories" },
-    { name: "brand", required: true, type: "string", maxLength: 64 },
+    { name: "brand", required: true, type: "brand", maxLength: 64 },
     { name: "name", required: true, type: "i18n", languages: ["en", "fr", "de"], required_languages: ["en"] },
     { name: "power_w", required: false, type: "number", exclusiveMinimum: 0 },
     { name: "count", required: false, type: "integer", minimum: 1 },
@@ -99,6 +99,8 @@ function setup({ language = "en", providers = true } = {}) {
           return { refreshed: true };
         case "entries":
           return entries[`${fields.section}/${fields.kind}`] || [];
+        case "brands":
+          return [{ key: "redsea", name: "Red Sea", count: 3 }];
         case "form":
           return FORM;
         case "entry":
@@ -131,6 +133,19 @@ function setup({ language = "en", providers = true } = {}) {
           return { connected: false };
         case "contributions":
           return state.contribs;
+        case "pending":
+          return [
+            { section: "equipment", kind: "task", id: "rinse", label: "Rinse", open_pr: null },
+            { section: "equipment", kind: "item", id: "mine", label: "Mine", open_pr: null },
+            { section: "equipment", kind: "item", id: "sent", label: "Sent", open_pr: 4 },
+          ];
+        case "contribute_batch":
+          if (state.expireOnce) {
+            state.expireOnce = false;
+            state.github = { connected: false, login: null };
+            throw { code: "auth_required", message: "GitHub login expired or revoked" };
+          }
+          return { submitted: true, number: 9, url: "https://github.com/x/pull/9", count: 2, skipped: [] };
         case "contribute":
           if (state.expireOnce) {
             state.expireOnce = false;
@@ -684,4 +699,72 @@ test("a failed translation says so", async () => {
   type(window, field(root, "name").querySelector("input"), "Heater");
   button(field(root, "name"), "Translate").click();
   await until(() => text(field(root, "name")).includes("no translation service"));
+});
+
+test("a brand spelled differently from a known one is corrected in one click", async () => {
+  const { window, root } = setup();
+  await openNewItem(window, root);
+  const input = field(root, "brand").querySelector("input");
+  assert.equal(field(root, "brand").querySelector("datalist option").value, "Red Sea");
+  type(window, input, "red-sea");
+  assert.match(text(field(root, "brand")), /Same brand as « Red Sea »/);
+  button(field(root, "brand"), "Use this spelling").click();
+  assert.equal(input.value, "Red Sea");
+  assert.doesNotMatch(text(field(root, "brand")), /Same brand as/);
+});
+
+test("Propose all sends the selected entries in one request, after the certification", async () => {
+  const { root, calls, window, state } = setup();
+  state.github = { connected: true, login: "elwin" };
+  await until(() => button(root, "Propose all my entries"));
+  button(root, "Propose all my entries").click();
+  await until(() => text(root).includes("Rinse"));
+  // What is already in an open pull request is not selected (and cannot be)
+  const boxes = [...root.querySelectorAll(".entry input[type=checkbox]")];
+  assert.deepEqual(boxes.map((b) => [b.checked, b.disabled]), [[true, false], [true, false], [false, true]]);
+  assert.match(text(root), /already in the open pull request #4/);
+  const go = button(root, "Propose the selected entries");
+  assert.equal(go.disabled, true);
+  const attest = [...root.querySelectorAll("input[type=checkbox]")].at(-1);
+  attest.checked = true;
+  change(window, attest);
+  assert.equal(go.disabled, false);
+  go.click();
+  await until(() => text(root).includes("Pull request opened, entries: 2 (#9)"));
+  assert.equal(
+    JSON.stringify(last(calls, "contribute_batch").entries),
+    JSON.stringify([
+      { section: "equipment", kind: "task", entry_id: "rinse" },
+      { section: "equipment", kind: "item", entry_id: "mine" },
+    ]),
+  );
+});
+
+test("a batch refused for an expired token is sent after signing in again", async () => {
+  const { root, calls, window, state, card } = setup();
+  state.github = { connected: true, login: "elwin" };
+  state.expireOnce = true;
+  state.polls = [{ status: "ok", login: "elwin" }];
+  await card._githubStatus();
+  await until(() => button(root, "Propose all my entries"));
+  button(root, "Propose all my entries").click();
+  await until(() => text(root).includes("Rinse"));
+  const attest = [...root.querySelectorAll("input[type=checkbox]")].at(-1);
+  attest.checked = true;
+  change(window, attest);
+  button(root, "Propose the selected entries").click();
+  await until(() => text(root).includes("ABCD-1234"));
+  await until(() => text(root).includes("Pull request opened, entries: 2 (#9)"), 6000);
+  assert.equal(calls.filter((c) => c.command === "contribute_batch").length, 2);
+});
+
+test("the redsea icon prefix is accepted only where its icon set is registered", async () => {
+  const { window, root } = setup();
+  window.customIcons = { redsea: { getIcon() {}, getIconList() {} } };
+  await openNewItem(window, root);
+  const input = () => field(root, "icon").querySelector("input");
+  type(window, input(), "redsea:gyre-off");
+  assert.doesNotMatch(text(field(root, "icon")), /must start with/);
+  type(window, input(), "fa:x");
+  assert.match(text(field(root, "icon")), /must start with mdi:, redsea:/);
 });

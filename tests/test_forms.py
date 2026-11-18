@@ -37,7 +37,7 @@ def test_item_form():
     assert (
         by_name["category"]["ref"] == "categories" and by_name["category"]["required"]
     )
-    assert by_name["brand"]["type"] == "string" and by_name["brand"]["maxLength"] == 64
+    assert by_name["brand"]["type"] == "brand" and by_name["brand"]["maxLength"] == 64
     assert by_name["name"]["type"] == "i18n" and by_name["name"][
         "required_languages"
     ] == ["en"]

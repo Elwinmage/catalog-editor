@@ -7,11 +7,14 @@ entries that come from a release are edited as local overrides.
 
 from __future__ import annotations
 
+import json
+from collections import Counter
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Protocol
 
-from .catalog_pack import Layer
-from .catalog_rules import Context
+from .catalog_pack import KIND_LAYOUT, Layer
+from .catalog_rules import Context, brand_key
 from .const import VIEW_GROUPS, VIEW_KEYS
 
 
@@ -31,6 +34,31 @@ def strip_entry(
     return data
 
 
+def read_descriptor(
+    source: HasLayers, kind: str, entry_id: str
+) -> dict[str, Any] | None:
+    """The descriptor of an entry as written in the most specific layer having it.
+
+    The merged view overwrites the `source` field of an entry with the name of its
+    layer, so a descriptor with a `source` of its own (a reference of a verified
+    value) must be read from the disk to be edited without losing it.
+    """
+    folder, descriptor = KIND_LAYOUT["tasks" if kind == "task" else kind]
+    for layer in reversed(source.layers()):
+        path = (
+            layer.root
+            / folder
+            / (f"{entry_id}.json" if descriptor is None else f"{entry_id}/{descriptor}")
+        )
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict):
+            return data
+    return None
+
+
 def _group(
     view: dict[str, Any], kind: str, exclude: tuple[str, str] | None
 ) -> dict[str, dict[str, Any]]:
@@ -47,6 +75,7 @@ def build_context(
     section: str,
     exclude: tuple[str, str] | None = None,
     parameters: dict[str, dict[str, Any]] | None = None,
+    brands: dict[str, str] | None = None,
 ) -> Context:
     """What a draft is checked against; `exclude` leaves out the entry it replaces.
 
@@ -57,15 +86,48 @@ def build_context(
         return Context(
             tasks=_group(view, "task", exclude),
             categories=_group(view, "category", exclude),
+            brands=dict(brands or {}),
         )
     if section == "supplements":
-        return Context(supplements=_group(view, "supplement", exclude))
+        return Context(
+            supplements=_group(view, "supplement", exclude), brands=dict(brands or {})
+        )
     if section == "water_tests":
         return Context(
             water_tests=_group(view, "water_test", exclude),
             parameters=dict(parameters or {}),
+            brands=dict(brands or {}),
         )
     return Context(parameters=_group(view, "parameter", exclude))
+
+
+def count_brands(
+    views: Mapping[str, dict[str, Any]],
+    exclude: tuple[str, str, str] | None = None,
+) -> dict[str, Counter[str]]:
+    """How each brand is written in the catalogs: key -> spelling -> entries.
+
+    `views`: merged view by section. `exclude`: (section, kind, id) of the entry a
+    draft replaces, which must not impose its old spelling on itself.
+    """
+    brands: dict[str, Counter[str]] = {}
+    for section, view in views.items():
+        for entry_id, entry in view.get("items", {}).items():
+            brand = entry.get("brand")
+            if not isinstance(brand, str) or not brand:
+                continue
+            if exclude and exclude[0] == section and exclude[2] == entry_id:
+                continue
+            brands.setdefault(brand_key(brand), Counter())[brand] += 1
+    return brands
+
+
+def preferred_spellings(counts: Mapping[str, Counter[str]]) -> dict[str, str]:
+    """The spelling to keep for each brand: the most used, then the first by name."""
+    return {
+        key: min(spellings, key=lambda text: (-spellings[text], text))
+        for key, spellings in counts.items()
+    }
 
 
 def entry_label(kind: str, entry_id: str, data: dict[str, Any]) -> str:

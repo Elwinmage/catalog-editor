@@ -15,7 +15,7 @@ from typing import Any
 
 from .catalog_rules import ASSET_FILES, KNOWN_LANGS
 from .const import SECTION_KINDS
-from .hints import HAS_VISUAL, ID_FROM, REFS
+from .hints import BRAND_FIELD, HAS_VISUAL, ID_FROM, REFS
 
 _DEF_RE = re.compile(r"#/\$defs/([A-Za-z0-9_]+)$")
 #: Shared definitions that are a widget of their own
@@ -148,12 +148,16 @@ def build_form(kind: str, schemas: dict[str, dict[str, Any]]) -> dict[str, Any]:
     schema = schemas[kind]
     common = schemas.get("common", {})
     section = next(s for s, kinds in SECTION_KINDS.items() if kind in kinds)
+    fields = _fields(schema, "", REFS.get(kind, {}), common)
+    for field in fields:
+        if field["name"] == BRAND_FIELD.get(kind) and field["type"] == "string":
+            field["type"] = "brand"
     return {
         "kind": kind,
         "section": section,
         "title": schema.get("title", kind),
         "description": schema.get("description"),
-        "fields": _fields(schema, "", REFS.get(kind, {}), common),
+        "fields": fields,
         "id_from": list(ID_FROM[kind]),
         "has_visual": HAS_VISUAL[kind],
         "visual_limits": {

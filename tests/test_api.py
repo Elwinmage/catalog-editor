@@ -291,6 +291,36 @@ async def test_override_keeps_the_visual_of_the_catalog(editor, hass):
     assert entry["user_copy"] is True
 
 
+async def test_brands(editor):
+    brands = (await call(editor, "brands"))["result"]
+    names = {b["key"]: b["name"] for b in brands}
+    assert names["eheim"] == "Eheim" and names["b"] == "B"
+    # A draft spelling a known brand another way is refused, with the spelling to use
+    base = {"section": "equipment", "kind": "item", "entry_id": "eheim-201"}
+    data = {"category": "heater", "brand": "EHEIM", "model": "201"}
+    bad = (await call(editor, "validate", data=data, **base))["result"]
+    assert any("'EHEIM' is written 'Eheim' elsewhere" in e for e in bad["errors"])
+    ok = await call(editor, "validate", data={**data, "brand": "Eheim"}, **base)
+    assert not any("brand" in e for e in ok["result"]["errors"])
+    # Editing the only entry of a brand may change its spelling
+    own = {**base, "entry_id": "eheim-200"}
+    fix = await call(editor, "validate", data={**data, "brand": "EHEIM"}, **own)
+    assert not any("brand" in e for e in fix["result"]["errors"])
+
+
+async def test_entry_keeps_its_own_source(editor, hass):
+    # The view writes the layer in `source`: the descriptor is read from the disk
+    root = hass.data["_test_fakes"]["equipment"].root
+    descriptor = {"category": "heater", "brand": "Eheim", "model": "200", "source": "x"}
+    (root / "items/eheim-200/item.json").write_text(json.dumps(descriptor))
+    entry = (
+        await call(
+            editor, "entry", section="equipment", kind="item", entry_id="eheim-200"
+        )
+    )["result"]
+    assert entry["data"] == descriptor and entry["source"] == "pack"
+
+
 async def test_water_tests(editor, hass):
     from conftest import WATER_TEST
 
@@ -666,3 +696,132 @@ async def test_card_without_http_or_frontend(hass, aioclient_mock):
     assert "frontend" not in hass.config.components
     hass.http = None
     await async_register_card(hass)  # nothing to serve it with: no error
+
+
+async def test_batch_is_one_pull_request(editor, hass, hass_client, gh):
+    await sign_in(hass)
+    await save_item(editor, hass_client)
+    task = {"name": {"en": "Rinse"}, "schedule": interval(7)}
+    saved = await call(
+        editor, "save", data=task, section="equipment", kind="task", entry_id="rinse"
+    )
+    assert saved["result"]["saved"] is True
+    pending = (await call(editor, "pending"))["result"]
+    # Dependency order: the task, then the item
+    assert [(p["kind"], p["id"], p["open_pr"]) for p in pending] == [
+        ("task", "rinse", None),
+        ("item", "acme-x1", None),
+    ]
+    entries = [
+        {"section": "equipment", "kind": "item", "entry_id": "acme-x1"},
+        {"section": "equipment", "kind": "task", "entry_id": "rinse"},
+    ]
+    assert (await call(editor, "contribute_batch", entries=entries, attest=False))[
+        "error"
+    ]["code"] == "attestation_required"
+    done = (await call(editor, "contribute_batch", entries=entries, attest=True))[
+        "result"
+    ]
+    assert done["submitted"] is True and done["count"] == 2 and done["number"] == 1
+    assert len(gh.pulls) == 1
+    branch = gh.pulls[1]["head"]["ref"]
+    assert set(gh.files("elwin/reeftech-catalog", branch)) == {
+        "equipment/tasks/rinse.json",
+        "equipment/items/acme-x1/item.json",
+        "equipment/items/acme-x1/image.webp",
+        "equipment/items/acme-x1/thumb.webp",
+    }
+    # One commit per entry, the task first
+    head = gh.refs[("elwin/reeftech-catalog", branch)]
+    first = gh.commits[head][1]
+    assert gh.commits[first][1] == gh.refs[("Elwinmage/reeftech-catalog", "main")]
+    body = gh.pulls[1]["request"]["body"]
+    assert body.index("rinse") < body.index("acme-x1") and body.count("CC BY 4.0") == 1
+    listed = (await call(editor, "contributions"))["result"]
+    assert sorted((i["kind"], i["id"], i["number"]) for i in listed) == [
+        ("item", "acme-x1", 1),
+        ("task", "rinse", 1),
+    ]
+    # They are in an open pull request: not proposed again in a batch
+    again = await call(editor, "contribute_batch", entries=entries, attest=True)
+    assert again["error"]["code"] == "already_proposed"
+    after = (await call(editor, "pending"))["result"]
+    assert [p["open_pr"] for p in after] == [1, 1]
+    # An entry of the batch can still be updated in the pull request
+    await call(editor, "save", data={**ITEM, "power_w": 5}, **BASE)
+    appended = (await call(editor, "contribute", attest=True, **BASE))["result"]
+    assert appended["appended"] is True and appended["number"] == 1
+
+
+async def test_batch_refuses_invalid_entries(editor, hass, hass_client, gh):
+    await sign_in(hass)
+    await save_item(editor, hass_client)
+    hass.data[T].sources["equipment"].view["categories"].pop("heater")
+    entries = [{"section": "equipment", "kind": "item", "entry_id": "acme-x1"}]
+    refused = (await call(editor, "contribute_batch", entries=entries, attest=True))[
+        "result"
+    ]
+    assert refused["submitted"] is False and refused["errors"] and gh.pulls == {}
+
+
+async def save_rinse(editor):
+    task = {"name": {"en": "Rinse"}, "schedule": interval(7)}
+    saved = await call(
+        editor, "save", data=task, section="equipment", kind="task", entry_id="rinse"
+    )
+    assert saved["result"]["saved"] is True
+    return task
+
+
+RINSE = {"section": "equipment", "kind": "task", "entry_id": "rinse"}
+
+
+async def test_pending_skips_unreadable_entries(editor, hass):
+    await save_rinse(editor)
+    broken = Path(hass.config.path("reeftech_catalog", "user", "equipment", "tasks"))
+    (broken / "broken.json").write_text("{not json")
+    pending = (await call(editor, "pending"))["result"]
+    assert [p["id"] for p in pending] == ["rinse"]
+
+
+async def test_batch_refusals(editor, hass):
+    await sign_in(hass)
+    ghost = {"section": "equipment", "kind": "task", "entry_id": "ghost"}
+    refused = await call(editor, "contribute_batch", entries=[ghost], attest=True)
+    assert refused["error"]["code"] == "no_user_copy"
+    # The same entry twice is sent once
+    await save_rinse(editor)
+    refused = await call(
+        editor, "contribute_batch", entries=[RINSE, RINSE, ghost], attest=True
+    )
+    assert refused["error"]["code"] == "no_user_copy"
+
+
+async def test_batch_skips_what_the_catalog_has(
+    editor, hass, hass_client, aioclient_mock, monkeypatch
+):
+    from custom_components.catalog_editor.storage import dump
+
+    monkeypatch.setattr(github, "FORK_DELAY_S", 0)
+    task = await save_rinse(editor)
+    await sign_in(hass)
+    gh = FakeGithub(aioclient_mock, files={"equipment/tasks/rinse.json": dump(task)})
+    only = await call(editor, "contribute_batch", entries=[RINSE], attest=True)
+    assert only["error"]["code"] == "no_change" and gh.pulls == {}
+    await save_item(editor, hass_client)
+    both = [{"section": "equipment", "kind": "item", "entry_id": "acme-x1"}, RINSE]
+    done = (await call(editor, "contribute_batch", entries=both, attest=True))["result"]
+    assert done["count"] == 1 and done["skipped"] == ["task/rinse"]
+
+
+async def test_batch_github_errors(editor, hass, gh, monkeypatch):
+    await save_rinse(editor)
+    await sign_in(hass)
+    monkeypatch.setattr(github, "MAX_FILE_BYTES", 1)
+    too_big = await call(editor, "contribute_batch", entries=[RINSE], attest=True)
+    assert too_big["error"]["code"] == "too_big" and gh.pulls == {}
+    assert hass.data[T].contributions.token is not None
+    gh.valid = False  # the token was revoked
+    revoked = await call(editor, "contribute_batch", entries=[RINSE], attest=True)
+    assert revoked["error"]["code"] == "auth_required"
+    assert hass.data[T].contributions.token is None

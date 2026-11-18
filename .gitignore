@@ -1,6 +1,7 @@
 __pycache__/
 *.py[cod]
 .coverage
+reports/
 .pytest_cache/
 .ruff_cache/
 .pyright/

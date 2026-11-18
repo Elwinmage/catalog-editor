@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Éditeur de catalogues",
-        "description": "Ajoutez et modifiez des éléments des catalogues (équipements, suppléments, paramètres, tests d'eau). Ils sont utilisables immédiatement par les intégrations qui lisent les catalogues. Pour les proposer au catalogue, enregistrez une OAuth App GitHub avec le « device flow » activé et collez son client ID.",
+        "description": "Ajoutez et modifiez des éléments des catalogues. Ils sont utilisables immédiatement par les intégrations qui les lisent.\n\nPour **proposer** des éléments au catalogue (pull requests), l'éditeur a besoin du Client ID d'une OAuth App GitHub à vous. Création en une minute :\n\n1. Ouvrez [github.com/settings/applications/new](https://github.com/settings/applications/new) (connectez-vous à GitHub si besoin).\n2. *Application name* : ce que vous voulez (ex. `Catalog editor`). *Homepage URL* et *Authorization callback URL* : une adresse quelconque, ex. `https://github.com/Elwinmage/reeftech-catalog` (elles ne servent pas).\n3. Cochez **Enable Device Flow**, puis cliquez sur **Register application**.\n4. Copiez le **Client ID** affiché sur la page suivante (aucun secret n'est nécessaire) et collez-le ci-dessous.",
         "data": {
           "client_id": "Client ID de l'OAuth App GitHub",
           "sections": "Catalogues auxquels s'abonner"

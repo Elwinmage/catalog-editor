@@ -20,7 +20,7 @@ jobs:
       - name: Types
         run: pyright custom_components/catalog_editor tests
       - name: Tests
-        run: pytest --cov=custom_components --cov-report=term-missing --cov-fail-under=100
+        run: pytest --cov=custom_components --cov-report=term-missing --cov-report=xml:reports/coverage.xml --cov-report=html:reports/htmlcov --cov-fail-under=100
 
   card:
     runs-on: ubuntu-latest

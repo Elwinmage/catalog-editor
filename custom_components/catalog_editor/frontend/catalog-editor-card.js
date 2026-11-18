@@ -61,6 +61,12 @@
       propose: "Save and propose to the catalog",
       attest: "I certify that any picture is my own work (or I hold the rights) and I agree to publish it under CC BY 4.0.",
       proposed: "Pull request opened",
+      propose_all: "Propose all my entries",
+      batch_help: "One pull request with one commit per entry, the entries others rely on first.",
+      batch_none: "You have no entry of your own to propose.",
+      batch_open: "already in the open pull request",
+      batch_go: "Propose the selected entries",
+      proposed_batch: "Pull request opened, entries:",
       proposed_update: "Added to your open pull request",
       github: "GitHub",
       connected_as: "Connected as",
@@ -80,6 +86,8 @@
       refresh: "Refresh",
       login_resume: "GitHub login expired: sign in again, your proposal will be sent right after.",
       icon_prefix: "The icon must start with",
+      brand_known: "Same brand as",
+      brand_use: "Use this spelling",
       state_open: "open",
       state_merged: "merged",
       state_closed: "closed",
@@ -154,6 +162,12 @@
       propose: "Enregistrer et proposer au catalogue",
       attest: "Je certifie que toute image est mon œuvre (ou que j'en détiens les droits) et j'accepte de la publier sous CC BY 4.0.",
       proposed: "Pull request ouverte",
+      propose_all: "Tout proposer",
+      batch_help: "Une seule pull request, un commit par élément, ceux dont les autres dépendent d'abord.",
+      batch_none: "Vous n'avez aucun élément personnel à proposer.",
+      batch_open: "déjà dans la pull request ouverte",
+      batch_go: "Proposer les éléments sélectionnés",
+      proposed_batch: "Pull request ouverte, éléments :",
       proposed_update: "Ajouté à votre pull request ouverte",
       github: "GitHub",
       connected_as: "Connecté en tant que",
@@ -173,6 +187,8 @@
       refresh: "Actualiser",
       login_resume: "La connexion GitHub a expiré : reconnectez-vous, votre proposition sera envoyée juste après.",
       icon_prefix: "L'icône doit commencer par",
+      brand_known: "Même marque que",
+      brand_use: "Utiliser cette graphie",
       state_open: "ouverte",
       state_merged: "fusionnée",
       state_closed: "fermée",
@@ -435,7 +451,7 @@
             : el("div", { class: `msg ${s.message.kind}`, text }),
         );
       }
-      if (s.catalogs) card.append(s.mode === "form" ? this._renderForm() : this._renderList());
+      if (s.catalogs) card.append(s.mode === "form" ? this._renderForm() : s.mode === "batch" ? this._renderBatch() : this._renderList());
       if (s.catalogs) card.append(this._renderGithub());
       root.append(card);
     }
@@ -630,6 +646,7 @@
       try {
         const form = await this.ws("form", { section: s.section, kind: s.kind });
         await this._preloadRefs(form.fields);
+        this._brandList = form.fields.some((field) => field.type === "brand") ? await this.ws("brands") : [];
         let entry = { data: {}, source: null, image: null, thumb: null, user_copy: false };
         if (entryId !== null) {
           entry = await this.ws("entry", { section: s.section, kind: s.kind, entry_id: entryId });
@@ -736,6 +753,8 @@
           return this._text(field, get, set);
         case "icon":
           return this._icon(field, get, set);
+        case "brand":
+          return this._brand(field, get, set);
         case "number":
         case "integer":
           return this._number(field, get, set);
@@ -772,12 +791,51 @@
       });
     }
 
+    // Brand: a free text with the brands of the catalogs as suggestions. A brand that
+    // only differs by case, accents or punctuation from a known one is the same brand:
+    // the known spelling is offered (the catalog refuses the other one).
+    _brand(field, get, set) {
+      const brands = this._brandList || [];
+      const key = (text) => String(text).normalize("NFKD").replace(/[^A-Za-z0-9]+/g, "").toLowerCase();
+      const wrap = el("div");
+      const listId = "brands-list";
+      const list = el("datalist", { id: listId }, brands.map((brand) => el("option", { value: brand.name })));
+      const hint = el("div", { class: "help brand-hint" });
+      const input = this._text(field, get, (value) => {
+        set(value);
+        check(value);
+      });
+      input.setAttribute("list", listId);
+      const check = (value) => {
+        hint.replaceChildren();
+        const known = value && brands.find((brand) => brand.key === key(value));
+        if (!known || known.name === value) return;
+        hint.append(
+          `${this.t("brand_known")} « ${known.name} ». `,
+          el("button", {
+            class: "btn",
+            type: "button",
+            text: this.t("brand_use"),
+            onclick: () => {
+              input.value = known.name;
+              set(known.name);
+              check(known.name);
+            },
+          }),
+        );
+      };
+      wrap.append(input, list, hint);
+      check(get());
+      return wrap;
+    }
+
     // Icon: the text input works at once; it is swapped for Home Assistant's own
     // picker once that (lazily loaded) element is available.
     _icon(field, get, set) {
       const wrap = el("div");
       const warn = el("div", { class: "help", text: "" });
-      const prefixes = this._s.iconPrefixes || ["mdi"];
+      // `redsea:` icons are drawn only where the redsea integration provides the set
+      const prefixes = ["mdi", ...(window.customIcons?.redsea || window.customIconsets?.redsea ? ["redsea"] : [])];
       const check = (value) => {
         const ok = !value || prefixes.some((prefix) => String(value).startsWith(`${prefix}:`));
         warn.textContent = ok ? "" : `${this.t("icon_prefix")} ${prefixes.map((prefix) => `${prefix}:`).join(", ")}`;
@@ -1296,9 +1354,14 @@
       const s = this._s;
       const { section, kind, entryId } = request;
       try {
-        const result = await this.ws("contribute", { section, kind, entry_id: entryId, attest: true });
+        const result = request.batch
+          ? await this.ws("contribute_batch", { entries: request.batch, attest: true })
+          : await this.ws("contribute", { section, kind, entry_id: entryId, attest: true });
         if (!result.submitted) {
           s.message = { kind: "error", text: result.errors.join(" ") };
+        } else if (request.batch) {
+          s.message = { kind: "info", text: `${this.t("proposed_batch")} ${result.count} (#${result.number})` };
+          s.mode = "list";
         } else {
           s.message = { kind: "info", text: `${this.t(result.appended ? "proposed_update" : "proposed")}: #${result.number}` };
         }
@@ -1316,6 +1379,84 @@
         }
         this.fail(err);
       }
+    }
+
+    // -- all the entries of the user in one pull request -----------------------------------
+
+    async _openBatch() {
+      const s = this._s;
+      try {
+        const items = await this.ws("pending");
+        const key = (item) => `${item.section}/${item.kind}/${item.id}`;
+        s.batch = { items, key, checked: new Set(items.filter((item) => !item.open_pr).map(key)), attest: false };
+        s.mode = "batch";
+        s.message = null;
+        this.render();
+      } catch (err) {
+        this.fail(err);
+      }
+    }
+
+    _renderBatch() {
+      const s = this._s;
+      const batch = s.batch;
+      const wrap = el("div");
+      wrap.append(
+        el(
+          "div",
+          { class: "row" },
+          el("button", { class: "btn", text: `← ${this.t("back")}`, onclick: () => { s.mode = "list"; this.render(); } }),
+          el("h3", { class: "grow", text: this.t("propose_all") }),
+        ),
+        el("div", { class: "help", text: this.t("batch_help") }),
+      );
+      if (!batch.items.length) {
+        wrap.append(el("div", { class: "sub", text: this.t("batch_none") }));
+        return wrap;
+      }
+      const go = el("button", { class: "btn primary", text: this.t("batch_go"), onclick: () => this._proposeBatch() });
+      const refresh = () => {
+        go.disabled = !batch.attest || batch.checked.size === 0;
+      };
+      const rows = batch.items.map((item) => {
+        const id = batch.key(item);
+        return el(
+          "label",
+          { class: "entry" },
+          el("input", {
+            type: "checkbox",
+            checked: batch.checked.has(id),
+            disabled: !!item.open_pr,
+            onchange: (event) => {
+              if (event.target.checked) batch.checked.add(id);
+              else batch.checked.delete(id);
+              refresh();
+            },
+          }),
+          el("span", { class: "grow" }, el("div", { text: item.label }), el("div", { class: "sub", text: `${item.kind} · ${item.id}${item.open_pr ? ` · ${this.t("batch_open")} #${item.open_pr}` : ""}` })),
+        );
+      });
+      wrap.append(el("div", { class: "list" }, rows));
+      if (!s.github.connected) wrap.append(el("div", { class: "help", text: this.t("needs_github") }));
+      wrap.append(
+        el("label", { class: "sub" }, el("input", {
+          type: "checkbox",
+          checked: batch.attest,
+          onchange: (event) => {
+            batch.attest = event.target.checked;
+            refresh();
+          },
+        }), ` ${this.t("attest")}`),
+        el("div", { class: "actions" }, go),
+      );
+      refresh();
+      return wrap;
+    }
+
+    async _proposeBatch() {
+      const batch = this._s.batch;
+      const entries = batch.items.filter((item) => batch.checked.has(batch.key(item))).map((item) => ({ section: item.section, kind: item.kind, entry_id: item.id }));
+      if (entries.length) await this._submit({ batch: entries });
     }
 
     async _delete() {
@@ -1424,6 +1565,7 @@
       } else {
         box.append(el("button", { class: "btn", text: this.t("connect"), onclick: () => this._login() }));
       }
+      if (s.mode !== "batch") box.append(el("button", { class: "btn", text: this.t("propose_all"), onclick: () => this._openBatch() }));
       if (s.contribs.length) box.append(...this._renderContributions());
       return box;
     }

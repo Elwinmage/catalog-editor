@@ -25,6 +25,8 @@ draft replaces an entry, leave that entry out of the context.
 from __future__ import annotations
 
 import json
+import re
+import unicodedata
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from itertools import pairwise
@@ -125,6 +127,24 @@ class Context:
     supplements: dict[str, dict[str, Any]] = field(default_factory=dict)
     parameters: dict[str, dict[str, Any]] = field(default_factory=dict)
     water_tests: dict[str, dict[str, Any]] = field(default_factory=dict)
+    #: Brand key (see `brand_key`) -> the spelling the other entries use. Shared by
+    #: all sections, so that a brand is written the same way everywhere.
+    brands: dict[str, str] = field(default_factory=dict)
+
+
+def brand_key(brand: str) -> str:
+    """What two spellings of a brand have in common: lower case, no accent, no
+    space or punctuation (`Red Sea`, `red-sea` and `REDSEA` are one brand)."""
+    text = unicodedata.normalize("NFKD", brand).encode("ascii", "ignore").decode()
+    return re.sub(r"[^a-z0-9]+", "", text.lower())
+
+
+def _check_brand(report: Report, where: str, data: dict[str, Any], ctx: Context):
+    """A brand already in the catalog keeps its spelling."""
+    brand = data["brand"]
+    known = ctx.brands.get(brand_key(brand))
+    if known is not None and known != brand:
+        report.error(where, f"brand {brand!r} is written {known!r} elsewhere")
 
 
 def where_of(kind: str, entry_id: str) -> str:
@@ -261,6 +281,7 @@ def _check_category(report, where, entry_id, data, files, ctx) -> None:
 
 
 def _check_item(report, where, entry_id, data, files, ctx) -> None:
+    _check_brand(report, where, data, ctx)
     _check_task_refs(report, where, data.get("maintenance", []), ctx.tasks)
     category = ctx.categories.get(data["category"])
     if category is None:
@@ -278,6 +299,7 @@ def _check_item(report, where, entry_id, data, files, ctx) -> None:
 
 
 def _check_supplement(report, where, entry_id, data, files, ctx) -> None:
+    _check_brand(report, where, data, ctx)
     if not _has_image(files):
         report.warn(where, "no bottle image, the generic bottle will be shown")
 
@@ -428,6 +450,7 @@ def _check_test(report, where, test, parameters) -> None:
 
 
 def _check_water_test(report, where, entry_id, data, files, ctx) -> None:
+    _check_brand(report, where, data, ctx)
     brand, name = data["brand"].lower(), data["name"].lower()
     for other_id, other in ctx.water_tests.items():
         if (
@@ -507,6 +530,8 @@ def validate_entry(
     if not check_schema(report, where, data, validators[kind]):
         return False
     _RULES[kind](report, where, entry_id, data, files, ctx)
+    if "brand" in data:
+        ctx.brands.setdefault(brand_key(data["brand"]), data["brand"])
     return True
 
 

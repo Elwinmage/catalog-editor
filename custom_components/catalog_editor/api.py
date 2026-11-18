@@ -6,6 +6,7 @@ import base64
 import re
 import secrets
 import time
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -28,12 +29,15 @@ from .compat import vol
 from .const import DOMAIN, MAX_UPLOADS, SECTION_KINDS, UPLOAD_TTL_S, VIEW_GROUPS
 from .context import (
     build_context,
+    count_brands,
     entry_label,
     list_entries,
     locate_visual,
+    preferred_spellings,
+    read_descriptor,
     strip_entry,
 )
-from .contribute import contribute
+from .contribute import KIND_ORDER, BatchEntry, contribute, contribute_batch
 from .contributions import Contributions
 from .forms import build_form, suggest_id
 from .github import (
@@ -233,6 +237,18 @@ async def _parameters(data: EditorData, section: str) -> dict[str, dict[str, Any
     }
 
 
+async def _brand_counts(
+    data: EditorData, exclude: tuple[str, str, str] | None = None
+) -> dict[str, Counter[str]]:
+    """How the brands are written in every catalog the editor is subscribed to."""
+    views = {
+        section: await source.async_view()
+        for section, source in data.sources.items()
+        if source.installed is not None
+    }
+    return count_brands(views, exclude)
+
+
 async def _check(
     hass: HomeAssistant, target: _Target, msg: dict[str, Any]
 ) -> tuple[Report, dict[str, bytes]]:
@@ -247,6 +263,9 @@ async def _check(
         target.section,
         exclude=(kind, entry_id),
         parameters=await _parameters(target.data, target.section),
+        brands=preferred_spellings(
+            await _brand_counts(target.data, (target.section, kind, entry_id))
+        ),
     )
     report = validate_draft(
         kind,
@@ -330,6 +349,24 @@ async def ws_refresh(hass: HomeAssistant, msg: dict[str, Any]) -> list[dict[str,
     return _catalogs(data)
 
 
+@_command({}, "brands")
+async def ws_brands(hass: HomeAssistant, msg: dict[str, Any]) -> list[dict[str, Any]]:
+    """The brands of the catalogs, to choose one instead of typing it again.
+
+    `name` is the spelling to use; `key` is what the spellings have in common (a new
+    brand whose key is one of these is the same brand written another way).
+    """
+    counts = await _brand_counts(_editor(hass))
+    names = preferred_spellings(counts)
+    return sorted(
+        (
+            {"key": key, "name": names[key], "count": sum(spellings.values())}
+            for key, spellings in counts.items()
+        ),
+        key=lambda brand: brand["name"].lower(),
+    )
+
+
 @_command(_TARGET, "form")
 async def ws_form(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
     """The fields of a kind of entry, from the schema of the current release."""
@@ -354,8 +391,13 @@ async def ws_entry(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
     own = await hass.async_add_executor_job(
         target.data.catalog.has, target.section, target.kind, msg["entry_id"]
     )
+    raw = await hass.async_add_executor_job(
+        read_descriptor, target.source, target.kind, msg["entry_id"]
+    )
     return {
-        "data": strip_entry(target.kind, entry, target.view),
+        "data": raw
+        if raw is not None
+        else strip_entry(target.kind, entry, target.view),
         "source": entry.get("source"),
         "image": entry.get("image"),
         "thumb": entry.get("thumb"),
@@ -575,6 +617,139 @@ async def ws_contribute(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, A
     }
 
 
+#: Entries a single pull request may hold
+MAX_BATCH = 50
+
+
+@_command({}, "pending")
+async def ws_pending(hass: HomeAssistant, msg: dict[str, Any]) -> list[dict[str, Any]]:
+    """The entries of the user, to propose together (dependency order).
+
+    `open_pr` is the pull request an entry is already in, if any: it is proposed on
+    its own (a commit added to that pull request), not in a batch.
+    """
+    data = _editor(hass)
+
+    def read() -> list[dict[str, Any]]:
+        found = []
+        for section in data.sources:
+            for kind, entry_id in data.catalog.entries(section, SECTION_KINDS[section]):
+                try:
+                    entry = data.catalog.read(section, kind, entry_id)
+                except (OSError, ValueError):
+                    continue
+                found.append(
+                    {
+                        "section": section,
+                        "kind": kind,
+                        "id": entry_id,
+                        "label": entry_label(kind, entry_id, entry),
+                    }
+                )
+        return found
+
+    result = await hass.async_add_executor_job(read)
+    for item in result:
+        open_pr = data.contributions.find(item["section"], item["kind"], item["id"])
+        item["open_pr"] = open_pr["number"] if open_pr else None
+    result.sort(key=lambda i: (KIND_ORDER.index(i["kind"]), i["section"], i["id"]))
+    return result
+
+
+@_command(
+    {
+        vol.Required("entries"): vol.All([_ENTRY], vol.Length(min=1, max=MAX_BATCH)),
+        vol.Required("attest"): bool,
+    },
+    "contribute_batch",
+)
+async def ws_contribute_batch(
+    hass: HomeAssistant, msg: dict[str, Any]
+) -> dict[str, Any]:
+    """Propose several entries of the user as ONE pull request, a commit each."""
+    data = _editor(hass)
+    if not msg["attest"]:
+        raise _Refused(
+            "attestation_required", "Certify the pictures are yours (CC BY 4.0)"
+        )
+    client = _client(hass, data)
+    batch: list[BatchEntry] = []
+    errors: list[str] = []
+    warnings: list[str] = []
+    seen: set[tuple[str, str, str]] = set()
+    for item in msg["entries"]:
+        key = (item["section"], item["kind"], item["entry_id"])
+        if key in seen:
+            continue
+        seen.add(key)
+        section, kind, entry_id = key
+        target = await _target(hass, item)
+        if not await hass.async_add_executor_job(
+            data.catalog.has, section, kind, entry_id
+        ):
+            raise _Refused("no_user_copy", f"{kind} {entry_id}: save the entry first")
+        open_pr = data.contributions.find(section, kind, entry_id)
+        if open_pr is not None:
+            raise _Refused(
+                "already_proposed",
+                f"{kind} {entry_id} is already in the pull request #{open_pr['number']}",
+            )
+        entry = await hass.async_add_executor_job(
+            data.catalog.read, section, kind, entry_id
+        )
+        report, visuals = await _check(
+            hass, target, {**item, "data": entry, "remove_visual": False}
+        )
+        errors += report.errors
+        warnings += report.warnings
+        batch.append(
+            BatchEntry(
+                section,
+                kind,
+                entry_id,
+                entry_label(kind, entry_id, entry),
+                entry,
+                visuals,
+            )
+        )
+    if errors:
+        return {"submitted": False, "errors": errors, "warnings": warnings}
+    try:
+        pull, done, skipped = await contribute_batch(
+            client, str(data.contributions.login), batch
+        )
+    except GithubError as err:
+        await _signed_out(data, err)
+        raise
+    now = datetime.now(UTC).isoformat(timespec="seconds")
+    await data.contributions.async_record(
+        *(
+            {
+                "section": entry.section,
+                "kind": entry.kind,
+                "id": entry.entry_id,
+                "label": entry.label,
+                "number": pull.number,
+                "url": pull.url,
+                "branch": pull.branch,
+                "state": pull.state,
+                "update": update,
+                "created": now,
+                "released": False,
+            }
+            for entry, update in done
+        )
+    )
+    return {
+        "submitted": True,
+        "number": pull.number,
+        "url": pull.url,
+        "count": len(done),
+        "skipped": [f"{entry.kind}/{entry.entry_id}" for entry in skipped],
+        "warnings": warnings,
+    }
+
+
 def _released(data: EditorData, source: SectionSource, item: dict[str, Any]) -> bool:
     """The catalog the integrations run has the entry, as the user has it."""
     section, kind, entry_id = item["section"], item["kind"], item["id"]
@@ -624,9 +799,13 @@ async def ws_contributions(
     if store.token is not None:
         client = _client(hass, data)
         try:
+            states: dict[int, str] = {}
             for item in store.items:
                 if item["state"] == "open":
-                    item["state"] = (await client.pull(item["number"])).state
+                    number = item["number"]
+                    if number not in states:
+                        states[number] = (await client.pull(number)).state
+                    item["state"] = states[number]
         except GithubError as err:
             await _signed_out(data, err)  # offline or refused: the last state stays
     await _retire_merged(hass, data)
@@ -682,6 +861,7 @@ def async_register_api(hass: HomeAssistant) -> None:
         ws_catalogs,
         ws_refresh,
         ws_translate,
+        ws_brands,
         ws_form,
         ws_entries,
         ws_entry,
@@ -694,6 +874,8 @@ def async_register_api(hass: HomeAssistant) -> None:
         ws_github_login_poll,
         ws_github_logout,
         ws_contribute,
+        ws_pending,
+        ws_contribute_batch,
         ws_contributions,
     ):
         async_register_command(hass, command)

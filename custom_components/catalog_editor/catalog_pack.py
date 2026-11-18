@@ -591,13 +591,29 @@ def build_view(
     return view
 
 
+def usable_icon(icon: Any, icon_sets: Iterable[str] = ("mdi",)) -> str | None:
+    """The icon when its set is available on this installation, else None.
+
+    The catalog may use the `redsea:` icon set, which only the installations having
+    the redsea integration (or an editor) provide: the others get None and show
+    their default icon.
+    """
+    if not isinstance(icon, str) or ":" not in icon:
+        return None
+    return icon if icon.split(":", 1)[0] in set(icon_sets) else None
+
+
 def resolve_maintenance(
-    view: dict[str, Any], item_id: str | None = None, category_id: str | None = None
+    view: dict[str, Any],
+    item_id: str | None = None,
+    category_id: str | None = None,
+    icon_sets: Iterable[str] = ("mdi",),
 ) -> list[dict]:
     """Tasks to create for an equipment: category tasks overridden by the item ones.
 
     Each task: `task` (id), `name`, `description`, `icon`, `schedule`,
-    `regulatory`. Unknown tasks are skipped.
+    `regulatory`. Unknown tasks are skipped. `icon` is None when its icon set is not
+    in `icon_sets` (see `usable_icon`).
     """
     tasks: dict[str, dict[str, Any]] = view.get("tasks", {})
     item = view.get("items", {}).get(item_id) if item_id else None
@@ -633,7 +649,7 @@ def resolve_maintenance(
                 "task": task_id,
                 "name": template.get("name", {}),
                 "description": template.get("description", {}),
-                "icon": template.get("icon"),
+                "icon": usable_icon(template.get("icon"), icon_sets),
                 "schedule": ref.get("schedule", template.get("schedule")),
                 "regulatory": ref.get("regulatory", template.get("regulatory", False)),
             }
