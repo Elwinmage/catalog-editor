@@ -13,7 +13,7 @@ repos:
     hooks:
       - id: pyright
         name: Pyright
-        entry: pyright custom_components/reeftech_catalog_editor tests
+        entry: pyright custom_components/catalog_editor tests
         language: python
         additional_dependencies:
           - pyright
@@ -42,4 +42,4 @@ repos:
         entry: bash -c 'cd tests/js && npm install --no-audit --no-fund && node --test'
         language: system
         pass_filenames: false
-        files: ^(custom_components/reeftech_catalog_editor/frontend|tests/js)/
+        files: ^(custom_components/catalog_editor/frontend|tests/js)/

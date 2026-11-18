@@ -11,14 +11,14 @@ from pathlib import Path
 from conftest import BASE, manifest_of, schema_zip, serve, setup_editor
 from homeassistant.setup import async_setup_component
 
-from custom_components.reeftech_catalog_editor.catalog_runtime import (
+from custom_components.catalog_editor.catalog_runtime import (
     async_acquire_pack,
     async_release_pack,
     get_shared_pack,
 )
-from custom_components.reeftech_catalog_editor.const import USER_URL
+from custom_components.catalog_editor.const import USER_URL
 
-T = "reeftech_catalog_editor"
+T = "catalog_editor"
 CATEGORY = {"name": {"en": "Heater"}, "scopes": ["aquarium"], "icon": "mdi:thermometer"}
 ITEM = {"category": "heater", "brand": "Acme", "model": "X1"}
 
@@ -236,7 +236,7 @@ async def test_unload_gives_the_packs_back(hass, aioclient_mock):
 
 
 async def test_user_paths_need_http(hass, tmp_path):
-    from custom_components.reeftech_catalog_editor.frontend import (
+    from custom_components.catalog_editor.frontend import (
         async_register_user_paths,
     )
 

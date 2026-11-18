@@ -6,7 +6,7 @@ import json
 
 from conftest import BASE, manifest_of, schema_zip, serve, setup_editor
 
-from custom_components.reeftech_catalog_editor.schemas import SchemaStore
+from custom_components.catalog_editor.schemas import SchemaStore
 
 
 async def test_refresh_installs_and_reloads(hass, aioclient_mock):
@@ -87,12 +87,12 @@ async def test_unreadable_folder_is_dropped(hass, aioclient_mock):
 
 async def test_setup_and_unload(hass, aioclient_mock):
     entry = await setup_editor(hass, aioclient_mock)
-    data = hass.data["reeftech_catalog_editor"]
+    data = hass.data["catalog_editor"]
     assert all(
         data.schemas.ready(s) for s in ("equipment", "supplements", "parameters")
     )
     assert await hass.config_entries.async_unload(entry.entry_id)
-    assert "reeftech_catalog_editor" not in hass.data
+    assert "catalog_editor" not in hass.data
 
 
 async def test_missing_checksum_file_is_tolerated(hass, aioclient_mock):

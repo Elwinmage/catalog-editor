@@ -1,0 +1,34 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Éditeur de catalogues",
+        "description": "Ajoutez et modifiez des éléments des catalogues (équipements, suppléments, paramètres, tests d'eau). Ils sont utilisables immédiatement par les intégrations qui lisent les catalogues. Pour les proposer au catalogue, enregistrez une OAuth App GitHub avec le « device flow » activé et collez son client ID.",
+        "data": {
+          "client_id": "Client ID de l'OAuth App GitHub",
+          "sections": "Catalogues auxquels s'abonner"
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Catalogues",
+        "data": {
+          "sections": "Catalogues auxquels s'abonner"
+        }
+      }
+    }
+  },
+  "selector": {
+    "sections": {
+      "options": {
+        "equipment": "Équipements",
+        "supplements": "Suppléments",
+        "parameters": "Paramètres",
+        "water_tests": "Tests d'eau"
+      }
+    }
+  }
+}

@@ -1,11 +1,14 @@
-"""Constants of the ReefTech catalog editor."""
+"""Constants of the Catalog editor."""
 
 from __future__ import annotations
 
-DOMAIN = "reeftech_catalog_editor"
+DOMAIN = "catalog_editor"
 
 #: Client id of the GitHub OAuth App (device flow enabled) used to sign in
 CONF_CLIENT_ID = "client_id"
+
+#: Sections of the catalog the editor subscribes to (option; all by default)
+CONF_SECTIONS = "sections"
 
 #: Sections of the catalog, and the kinds of entries each one holds. A kind is
 #: the one of catalog_rules (`task`), which the pack calls `tasks`.

@@ -1,6 +1,6 @@
 {
-  "domain": "reeftech_catalog_editor",
-  "name": "ReefTech catalog editor",
+  "domain": "catalog_editor",
+  "name": "Catalog editor",
   "codeowners": [
     "@Elwinmage"
   ],
@@ -9,10 +9,10 @@
     "http",
     "websocket_api"
   ],
-  "documentation": "https://github.com/Elwinmage/reeftech_catalog_editor",
+  "documentation": "https://github.com/Elwinmage/catalog_editor",
   "integration_type": "service",
   "iot_class": "cloud_polling",
-  "issue_tracker": "https://github.com/Elwinmage/reeftech_catalog_editor/issues",
+  "issue_tracker": "https://github.com/Elwinmage/catalog_editor/issues",
   "requirements": [
     "jsonschema>=4.23",
     "referencing>=0.35"

@@ -61,7 +61,7 @@ def texts(
     lines = [
         f"{verb} **{label}** (`{entry_to_path(kind, entry_id)}`).",
         "",
-        "Made with the ReefTech catalog editor; the entry was checked with the "
+        "Made with the Catalog editor; the entry was checked with the "
         "same rules as the catalog CI.",
     ]
     if pictured:

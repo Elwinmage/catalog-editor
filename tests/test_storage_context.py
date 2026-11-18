@@ -6,8 +6,8 @@ import json
 
 from conftest import FakeSource, equipment_view
 
-from custom_components.reeftech_catalog_editor import context
-from custom_components.reeftech_catalog_editor.storage import UserCatalog, dump
+from custom_components.catalog_editor import context
+from custom_components.catalog_editor.storage import UserCatalog, dump
 
 
 def test_user_catalog_entries(tmp_path):

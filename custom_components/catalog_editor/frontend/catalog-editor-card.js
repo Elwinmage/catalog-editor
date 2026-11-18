@@ -1,15 +1,15 @@
 /*
- * ReefTech catalog editor card.
+ * Catalog editor card.
  *
  * A plain renderer: everything it shows (catalogs, entries, the fields of a
  * form, the verdict of the checks, the pull requests) comes from the websocket
- * commands of the reeftech_catalog_editor integration, which reads the JSON
+ * commands of the catalog_editor integration, which reads the JSON
  * Schemas of the catalog. No build step, no dependency.
  */
 (() => {
   "use strict";
 
-  const DOMAIN = "reeftech_catalog_editor";
+  const DOMAIN = "catalog_editor";
 
   const TEXTS = {
     en: {
@@ -72,7 +72,14 @@
       login_denied: "GitHub login refused.",
       needs_github: "Connect to GitHub to propose entries to the catalog.",
       contributions: "Your pull requests",
+      translate: "Translate",
+      translate_hint: "Fill the empty languages with a machine translation (the text is sent to Google Translate, or MyMemory)",
+      translate_done: "Machine translation: please check it.",
+      translate_nothing: "Every language is already filled.",
+      translate_empty: "Write a text first.",
       refresh: "Refresh",
+      login_resume: "GitHub login expired: sign in again, your proposal will be sent right after.",
+      icon_prefix: "The icon must start with",
       state_open: "open",
       state_merged: "merged",
       state_closed: "closed",
@@ -158,7 +165,14 @@
       login_denied: "Connexion à GitHub refusée.",
       needs_github: "Connectez-vous à GitHub pour proposer des éléments au catalogue.",
       contributions: "Vos pull requests",
+      translate: "Traduire",
+      translate_hint: "Remplit les langues vides par une traduction automatique (le texte est envoyé à Google Traduction, ou MyMemory)",
+      translate_done: "Traduction automatique : à relire.",
+      translate_nothing: "Toutes les langues sont déjà remplies.",
+      translate_empty: "Saisissez d'abord un texte.",
       refresh: "Actualiser",
+      login_resume: "La connexion GitHub a expiré : reconnectez-vous, votre proposition sera envoyée juste après.",
+      icon_prefix: "L'icône doit commencer par",
       state_open: "ouverte",
       state_merged: "fusionnée",
       state_closed: "fermée",
@@ -224,6 +238,7 @@
     .sub { color: var(--secondary-text-color); font-size: 0.85em; }
     .badge { border-radius: 10px; padding: 1px 8px; font-size: 0.75em; border: 1px solid var(--divider-color); color: var(--secondary-text-color); }
     .badge.user, .badge.open { color: var(--primary-color); border-color: var(--primary-color); }
+    .auto { font-style: italic; border-style: dashed; }
     .badge.closed { color: var(--error-color); border-color: var(--error-color); }
     .badge.merged { color: var(--success-color, #43a047); border-color: var(--success-color, #43a047); }
     .field { margin: 10px 0; }
@@ -279,13 +294,14 @@
 
   const humanize = (name) => String(name).replace(/_/g, " ");
 
-  class ReeftechCatalogEditorCard extends HTMLElement {
+  class CatalogEditorCard extends HTMLElement {
     constructor() {
       super();
       this.attachShadow({ mode: "open" });
       this._s = {
         catalogs: null,
         contribFilter: "open",
+        pending: null,
         section: null,
         kind: null,
         entries: [],
@@ -717,8 +733,9 @@
       switch (field.type) {
         case "string":
         case "id":
-        case "icon":
           return this._text(field, get, set);
+        case "icon":
+          return this._icon(field, get, set);
         case "number":
         case "integer":
           return this._number(field, get, set);
@@ -753,6 +770,59 @@
         placeholder: field.type === "icon" ? "mdi:wrench" : undefined,
         oninput: (event) => set(event.target.value),
       });
+    }
+
+    // Icon: the text input works at once; it is swapped for Home Assistant's own
+    // picker once that (lazily loaded) element is available.
+    _icon(field, get, set) {
+      const wrap = el("div");
+      const warn = el("div", { class: "help", text: "" });
+      const prefixes = this._s.iconPrefixes || ["mdi"];
+      const check = (value) => {
+        const ok = !value || prefixes.some((prefix) => String(value).startsWith(`${prefix}:`));
+        warn.textContent = ok ? "" : `${this.t("icon_prefix")} ${prefixes.map((prefix) => `${prefix}:`).join(", ")}`;
+      };
+      const text = this._text(field, get, (value) => {
+        set(value);
+        check(value);
+      });
+      wrap.append(text, warn);
+      check(get());
+      this._loadIconPicker().then((ok) => {
+        if (!ok || !wrap.isConnected) return;
+        const picker = document.createElement("ha-icon-picker");
+        picker.hass = this._hass;
+        picker.value = get() ?? "";
+        picker.label = "";
+        picker.addEventListener("value-changed", (event) => {
+          const value = event.detail && event.detail.value ? event.detail.value : undefined;
+          set(value);
+          check(value);
+        });
+        text.replaceWith(picker);
+      });
+      return wrap;
+    }
+
+    // HA loads `ha-icon-picker` lazily: an icon selector rendered by `ha-form`
+    // makes it load. Resolves false when it never shows up (text input stays).
+    async _loadIconPicker() {
+      if (customElements.get("ha-icon-picker")) return true;
+      try {
+        if (customElements.get("ha-form") && !this._iconLoader) {
+          const form = document.createElement("ha-form");
+          form.hass = this._hass;
+          form.schema = [{ name: "icon", selector: { icon: {} } }];
+          form.data = {};
+          form.style.display = "none";
+          document.body.append(form); // outlives the card's redraws while the chunk loads
+          this._iconLoader = form;
+        }
+        await Promise.race([customElements.whenDefined("ha-icon-picker"), new Promise((resolve, reject) => setTimeout(reject, 3000))]);
+        return true;
+      } catch (_) {
+        return false;
+      }
     }
 
     _number(field, get, set) {
@@ -816,26 +886,59 @@
     _i18n(field, get, set) {
       const languages = field.languages || ["en"];
       const required = new Set(field.required_languages || ["en"]);
-      const row = (lang) =>
-        el(
-          "div",
-          { class: "row" },
-          el("span", { class: "sub", text: lang, style: "width:2em" }),
-          el("div", { class: "grow" }, el("input", {
-            type: "text",
-            value: (get() || {})[lang] ?? "",
-            oninput: (event) => {
-              const next = { ...(get() || {}) };
-              if (event.target.value === "") delete next[lang];
-              else next[lang] = event.target.value;
-              set(next);
-            },
-          })),
-        );
+      const inputs = {};
+      const row = (lang) => {
+        const input = el("input", {
+          type: "text",
+          value: (get() || {})[lang] ?? "",
+          oninput: (event) => {
+            input.classList.remove("auto");
+            const next = { ...(get() || {}) };
+            if (event.target.value === "") delete next[lang];
+            else next[lang] = event.target.value;
+            set(next);
+          },
+        });
+        inputs[lang] = input;
+        return el("div", { class: "row" }, el("span", { class: "sub", text: lang, style: "width:2em" }), el("div", { class: "grow" }, input));
+      };
       const main = languages.filter((l) => required.has(l) || (get() || {})[l]);
       const box = el("div", {}, main.map(row));
       const others = languages.filter((l) => !main.includes(l));
-      if (others.length) box.append(el("details", {}, el("summary", { class: "sub", text: this.t("other_languages") }), others.map(row)));
+      const details = others.length ? el("details", {}, el("summary", { class: "sub", text: this.t("other_languages") }), others.map(row)) : null;
+      if (details) box.append(details);
+      if (languages.length > 1) {
+        const note = el("span", { class: "sub", text: "" });
+        const button = el("button", { class: "btn", text: this.t("translate"), title: this.t("translate_hint") });
+        button.onclick = async () => {
+          const current = get() || {};
+          const source = ["en", ...languages].find((lang) => current[lang]);
+          const targets = languages.filter((lang) => !current[lang]);
+          if (!source || !targets.length) {
+            note.textContent = this.t(source ? "translate_nothing" : "translate_empty");
+            return;
+          }
+          button.disabled = true;
+          note.textContent = "…";
+          try {
+            const { translations } = await this.ws("translate", { text: current[source], source, targets });
+            const next = { ...(get() || {}) };
+            for (const [lang, value] of Object.entries(translations)) {
+              if (next[lang]) continue; // typed meanwhile: never overwritten
+              next[lang] = value;
+              inputs[lang].value = value;
+              inputs[lang].classList.add("auto");
+            }
+            set(next);
+            if (details && targets.some((lang) => others.includes(lang) && translations[lang])) details.open = true;
+            note.textContent = this.t("translate_done");
+          } catch (err) {
+            note.textContent = (err && err.message) || this.t("error");
+          }
+          button.disabled = false;
+        };
+        box.append(el("div", { class: "row" }, button, note));
+      }
       return box;
     }
 
@@ -1184,6 +1287,14 @@
       const entryId = s.entryId;
       const [section, kind] = [s.section, s.kind];
       if (!(await this._save())) return;
+      await this._submit({ section, kind, entryId });
+    }
+
+    // Send a saved entry to the catalog. A refused (expired or revoked) token
+    // keeps the request and signs in again: it is sent once the login is done.
+    async _submit(request) {
+      const s = this._s;
+      const { section, kind, entryId } = request;
       try {
         const result = await this.ws("contribute", { section, kind, entry_id: entryId, attest: true });
         if (!result.submitted) {
@@ -1194,6 +1305,15 @@
         s.contribs = await this.ws("contributions");
         this.render();
       } catch (err) {
+        if (err && err.code === "auth_required") {
+          s.pending = request;
+          await this._githubStatus(false);
+          if (!s.login) await this._login();
+          s.message = { kind: "info", text: this.t("login_resume") };
+          this.render();
+          this._paintReport();
+          return;
+        }
         this.fail(err);
       }
     }
@@ -1333,10 +1453,13 @@
           }
           this._polling = false;
           s.login = null;
+          const pending = s.pending;
+          s.pending = null;
           if (result.status === "ok") await this._githubStatus(false);
           else s.message = { kind: "error", text: this.t(result.status === "expired" ? "login_expired" : "login_denied") };
           this.render();
           this._paintReport();
+          if (result.status === "ok" && pending) await this._submit(pending);
         } catch (err) {
           this._polling = false;
           s.login = null;
@@ -1348,6 +1471,7 @@
     async _logout() {
       try {
         await this.ws("github_logout");
+        this._s.pending = null;
         await this._githubStatus();
         this._paintReport();
       } catch (err) {
@@ -1356,14 +1480,14 @@
     }
   }
 
-  if (!customElements.get("reeftech-catalog-editor-card")) {
-    customElements.define("reeftech-catalog-editor-card", ReeftechCatalogEditorCard);
+  if (!customElements.get("catalog-editor-card")) {
+    customElements.define("catalog-editor-card", CatalogEditorCard);
   }
   window.customCards = window.customCards || [];
   window.customCards.push({
-    type: "reeftech-catalog-editor-card",
-    name: "ReefTech catalog editor",
+    type: "catalog-editor-card",
+    name: "Catalog editor",
     description: "Add and edit entries of the ReefTech catalogs and propose them as pull requests.",
   });
-  window.ReeftechCatalogEditorCard = ReeftechCatalogEditorCard;
+  window.CatalogEditorCard = CatalogEditorCard;
 })();

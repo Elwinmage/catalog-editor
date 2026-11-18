@@ -14,8 +14,8 @@ import pytest
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.reeftech_catalog_editor.catalog_pack import Layer
-from custom_components.reeftech_catalog_editor.const import DOMAIN
+from custom_components.catalog_editor.catalog_pack import Layer
+from custom_components.catalog_editor.const import DOMAIN
 
 SCHEMAS = Path(__file__).parent / "fixtures" / "schema"
 BASE = "https://github.com/Elwinmage/reeftech-catalog/releases/download"

@@ -8,14 +8,14 @@ import pytest
 from fake_github import FakeGithub
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from custom_components.reeftech_catalog_editor import contribute as contribution
-from custom_components.reeftech_catalog_editor import github
-from custom_components.reeftech_catalog_editor.contributions import (
+from custom_components.catalog_editor import contribute as contribution
+from custom_components.catalog_editor import github
+from custom_components.catalog_editor.contributions import (
     MAX_ITEMS,
     Contributions,
 )
-from custom_components.reeftech_catalog_editor.github import GithubClient, GithubError
-from custom_components.reeftech_catalog_editor.storage import dump
+from custom_components.catalog_editor.github import GithubClient, GithubError
+from custom_components.catalog_editor.storage import dump
 
 ITEM = {"category": "heater", "brand": "Acme", "model": "X1"}
 FORK = "elwin/reeftech-catalog"

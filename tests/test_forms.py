@@ -7,8 +7,8 @@ import json
 import pytest
 from conftest import KINDS, SCHEMAS
 
-from custom_components.reeftech_catalog_editor import forms
-from custom_components.reeftech_catalog_editor.const import SECTION_KINDS
+from custom_components.catalog_editor import forms
+from custom_components.catalog_editor.const import SECTION_KINDS
 
 
 def schemas_of(section: str) -> dict:

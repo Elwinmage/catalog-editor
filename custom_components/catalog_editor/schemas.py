@@ -1,7 +1,7 @@
 """JSON Schemas of the catalog, as published by its releases.
 
 Each release of a section carries `schema.zip` (data only). The editor keeps the
-latest one of every section in `<config>/reeftech_catalog_editor/schema/<section>/`
+latest one of every section in `<config>/catalog_editor/schema/<section>/`
 and checks drafts against it, so that what it accepts is what the catalog CI
 accepts.
 """

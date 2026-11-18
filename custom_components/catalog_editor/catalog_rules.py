@@ -2,7 +2,7 @@
 """ReefTech catalog rules: what an entry must follow, beyond its JSON Schema.
 
 Canonical copy: reeftech-catalog/client/. `scripts/validate.py` (CI, pre-commit,
-releases) and the tools editing the catalog (reeftech_catalog_editor) share this
+releases) and the tools editing the catalog (catalog_editor) share this
 one implementation, so that a draft is accepted by the editor exactly when the
 CI accepts it. Tools get a copy through `scripts/sync_client.py`; edit it here,
 never in a copy.

@@ -11,13 +11,13 @@ from aiohttp import FormData
 from conftest import interval, setup_editor
 from PIL import Image
 
-from custom_components.reeftech_catalog_editor import api
-from custom_components.reeftech_catalog_editor.catalog_runtime import (
+from custom_components.catalog_editor import api
+from custom_components.catalog_editor.catalog_runtime import (
     SIGNAL_USER_CATALOG_CHANGED,
 )
-from custom_components.reeftech_catalog_editor.images import Visual
+from custom_components.catalog_editor.images import Visual
 
-T = "reeftech_catalog_editor"
+T = "catalog_editor"
 ITEM = {"category": "heater", "brand": "Acme", "model": "X1", "name": {"en": "Acme X1"}}
 
 
@@ -145,6 +145,23 @@ async def test_not_loaded_and_non_admin(
     await setup_editor(hass, aioclient_mock, release=False)
     reader = await hass_ws_client(hass, hass_read_only_access_token)
     assert (await call(reader, "catalogs"))["error"]["code"] == "unauthorized"
+
+
+async def test_unsubscribed_catalogs(hass, aioclient_mock, hass_ws_client):
+    entry = await setup_editor(hass, aioclient_mock)
+    hass.config_entries.async_update_entry(entry, options={"sections": ["equipment"]})
+    await hass.async_block_till_done(wait_background_tasks=True)
+    admin = await hass_ws_client(hass)
+    result = (await call(admin, "catalogs"))["result"]
+    assert [c["section"] for c in result] == ["equipment"]
+    for command, fields in (
+        ("entries", {"section": "supplements", "kind": "supplement"}),
+        ("refresh", {"section": "supplements"}),
+    ):
+        reply = await call(admin, command, **fields)
+        assert reply["error"]["code"] == "not_subscribed"
+    # A subscribed catalog still answers, and a refresh of all skips the others
+    assert (await call(admin, "refresh"))["result"][0]["section"] == "equipment"
 
 
 async def test_validate_reports(editor):
@@ -378,7 +395,7 @@ async def test_register_api_once(hass, aioclient_mock):
 from fake_github import FakeGithub  # noqa: E402
 from homeassistant.helpers.dispatcher import async_dispatcher_connect  # noqa: E402
 
-from custom_components.reeftech_catalog_editor import github  # noqa: E402
+from custom_components.catalog_editor import github  # noqa: E402
 
 LOGIN = "https://github.com/login"
 BASE = {"section": "equipment", "kind": "item", "entry_id": "acme-x1"}
@@ -629,11 +646,11 @@ async def test_card_is_served_and_loaded(
     hass.config.components.add("frontend")
     await setup_editor(hass, aioclient_mock)
     assert len(loaded) == 1 and loaded[0].startswith(
-        "/reeftech_catalog_editor/reeftech-catalog-editor-card.js?v="
+        "/catalog_editor/catalog-editor-card.js?v="
     )
     http = await hass_client()
-    reply = await http.get("/reeftech_catalog_editor/reeftech-catalog-editor-card.js")
-    assert reply.status == 200 and "reeftech-catalog-editor-card" in await reply.text()
+    reply = await http.get("/catalog_editor/catalog-editor-card.js")
+    assert reply.status == 200 and "catalog-editor-card" in await reply.text()
     # Set up once, even if the entry is loaded again
     await hass.config_entries.async_reload(
         hass.config_entries.async_entries(T)[0].entry_id
@@ -642,7 +659,7 @@ async def test_card_is_served_and_loaded(
 
 
 async def test_card_without_http_or_frontend(hass, aioclient_mock):
-    from custom_components.reeftech_catalog_editor.frontend import async_register_card
+    from custom_components.catalog_editor.frontend import async_register_card
 
     # No frontend: the file is served but not loaded by the interface
     await setup_editor(hass, aioclient_mock)

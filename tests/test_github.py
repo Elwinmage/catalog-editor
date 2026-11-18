@@ -10,8 +10,8 @@ from fake_github import UP, FakeGithub
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from yarl import URL
 
-from custom_components.reeftech_catalog_editor import github
-from custom_components.reeftech_catalog_editor.github import GithubClient, GithubError
+from custom_components.catalog_editor import github
+from custom_components.catalog_editor.github import GithubClient, GithubError
 
 LOGIN = "https://github.com/login"
 

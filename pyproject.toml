@@ -1,7 +1,7 @@
 [tool.ruff]
 line-length = 88
 target-version = "py313"
-extend-exclude = ["custom_components/reeftech_catalog_editor/catalog_pack.py", "custom_components/reeftech_catalog_editor/catalog_runtime.py", "custom_components/reeftech_catalog_editor/catalog_rules.py", "custom_components/reeftech_catalog_editor/catalog_conversion.py"]
+extend-exclude = ["custom_components/catalog_editor/catalog_pack.py", "custom_components/catalog_editor/catalog_runtime.py", "custom_components/catalog_editor/catalog_rules.py", "custom_components/catalog_editor/catalog_conversion.py"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]

@@ -5,7 +5,7 @@ import { test } from "node:test";
 import { JSDOM } from "jsdom";
 
 const CODE = readFileSync(
-  new URL("../../custom_components/reeftech_catalog_editor/frontend/reeftech-catalog-editor-card.js", import.meta.url),
+  new URL("../../custom_components/catalog_editor/frontend/catalog-editor-card.js", import.meta.url),
   "utf8",
 );
 
@@ -92,6 +92,9 @@ function setup({ language = "en", providers = true } = {}) {
             { section: "supplements", kinds: ["supplement"], installed: providers ? "1.0.0" : null, latest: "1.0.0", update_available: false, in_progress: false, error: null, schemas: true, schema_error: null },
             { section: "water_tests", kinds: ["water_test"], installed: providers ? "1.0.0" : null, latest: "1.0.0", update_available: false, in_progress: false, error: null, schemas: true, schema_error: null },
           ];
+        case "translate":
+          if (state.translateError) throw { code: "translate_failed", message: "no translation service answered" };
+          return { translations: { fr: "Chauffage", de: "Heizung" } };
         case "refresh":
           return { refreshed: true };
         case "entries":
@@ -129,6 +132,11 @@ function setup({ language = "en", providers = true } = {}) {
         case "contributions":
           return state.contribs;
         case "contribute":
+          if (state.expireOnce) {
+            state.expireOnce = false;
+            state.github = { connected: false, login: null };
+            throw { code: "auth_required", message: "GitHub login expired or revoked" };
+          }
           return state.contributeResult;
         default:
           throw new Error(`unexpected ${command}`);
@@ -139,7 +147,7 @@ function setup({ language = "en", providers = true } = {}) {
       return { ok: state.uploadOk !== false, json: async () => state.uploadReply || { token: "tok1", preview: "data:image/webp;base64,AAAA", has_alpha: true } };
     },
   };
-  const card = window.document.createElement("reeftech-catalog-editor-card");
+  const card = window.document.createElement("catalog-editor-card");
   window.document.body.append(card);
   card.setConfig({});
   card.hass = hass;
@@ -592,7 +600,88 @@ test("the login can expire or be refused", async () => {
 
 test("registers itself as a custom card", () => {
   const { window } = setup();
-  assert.equal(window.customCards.at(-1).type, "reeftech-catalog-editor-card");
-  assert.equal(window.document.createElement("reeftech-catalog-editor-card").getCardSize(), 8);
-  assert.equal(JSON.stringify(window.ReeftechCatalogEditorCard.getStubConfig()), "{}");
+  assert.equal(window.customCards.at(-1).type, "catalog-editor-card");
+  assert.equal(window.document.createElement("catalog-editor-card").getCardSize(), 8);
+  assert.equal(JSON.stringify(window.CatalogEditorCard.getStubConfig()), "{}");
+});
+
+async function openNewItem(window, root) {
+  await until(() => button(root, "Items"));
+  button(root, "Items").click();
+  await until(() => button(root, "New"));
+  button(root, "New").click();
+  await until(() => field(root, "icon"));
+}
+
+test("the icon field warns about a wrong prefix", async () => {
+  const { window, root } = setup();
+  await openNewItem(window, root);
+  type(window, field(root, "icon").querySelector("input"), "fa:heat");
+  assert.match(text(field(root, "icon")), /must start with mdi:/);
+  type(window, field(root, "icon").querySelector("input"), "mdi:heat");
+  assert.doesNotMatch(text(field(root, "icon")), /must start with/);
+});
+
+test("the icon field uses Home Assistant's picker once it is defined", async () => {
+  const { window, root, calls } = setup();
+  class FakePicker extends window.HTMLElement {}
+  window.customElements.define("ha-icon-picker", FakePicker);
+  await openNewItem(window, root);
+  await until(() => field(root, "icon").querySelector("ha-icon-picker"));
+  const picker = field(root, "icon").querySelector("ha-icon-picker");
+  assert.equal(field(root, "icon").querySelector("input"), null);
+  picker.dispatchEvent(new window.CustomEvent("value-changed", { detail: { value: "mdi:fish" } }));
+  await until(() => calls.some((c) => c.command === "validate" && c.data && c.data.icon === "mdi:fish"));
+  picker.dispatchEvent(new window.CustomEvent("value-changed", { detail: { value: "fa:x" } }));
+  assert.match(text(field(root, "icon")), /must start with mdi:/);
+});
+
+test("a proposal refused for an expired token is sent after signing in again", async () => {
+  const { window, root, calls, state, card } = setup();
+  state.github = { connected: true, login: "elwin" };
+  state.expireOnce = true;
+  state.interval = 1;
+  state.polls = [{ status: "ok", login: "elwin" }];
+  await openNewItem(window, root);
+  await card._githubStatus(); // the card read the status before the test set it
+  type(window, field(root, "brand").querySelector("input"), "Acme");
+  const attest = [...root.querySelectorAll("input[type=checkbox]")].at(-1);
+  attest.checked = true;
+  change(window, attest);
+  await until(() => !button(root, "Save and propose").disabled);
+  button(root, "Save and propose").click();
+  await until(() => text(root).includes("ABCD-1234"));
+  assert.equal(calls.filter((c) => c.command === "contribute").length, 1);
+  await until(() => text(root).includes("Pull request opened: #7"), 6000);
+  assert.equal(calls.filter((c) => c.command === "contribute").length, 2);
+});
+
+test("Translate fills the empty languages and keeps what was typed", async () => {
+  const { window, root, calls, state } = setup();
+  await openNewItem(window, root);
+  const note = () => text(field(root, "name"));
+  button(field(root, "name"), "Translate").click();
+  assert.match(note(), /Write a text first/);
+  const inputs = () => field(root, "name").querySelectorAll("input");
+  type(window, inputs()[0], "Heater");
+  type(window, inputs()[1], "Réchauffeur");
+  button(field(root, "name"), "Translate").click();
+  await until(() => calls.some((c) => c.command === "translate"));
+  const sent = calls.find((c) => c.command === "translate");
+  assert.deepEqual([sent.text, sent.source, sent.targets], ["Heater", "en", ["de"]]);
+  await until(() => inputs()[2].value === "Heizung");
+  assert.equal(inputs()[1].value, "Réchauffeur");
+  assert.ok(inputs()[2].classList.contains("auto"));
+  assert.match(note(), /Machine translation/);
+  button(field(root, "name"), "Translate").click();
+  assert.match(note(), /already filled/);
+});
+
+test("a failed translation says so", async () => {
+  const { window, root, state } = setup();
+  await openNewItem(window, root);
+  state.translateError = true;
+  type(window, field(root, "name").querySelector("input"), "Heater");
+  button(field(root, "name"), "Translate").click();
+  await until(() => text(field(root, "name")).includes("no translation service"));
 });

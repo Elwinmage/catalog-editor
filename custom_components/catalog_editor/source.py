@@ -16,7 +16,7 @@ from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 
 from .catalog_pack import Layer, Manifest, build_view
 from .catalog_runtime import SharedPack, async_acquire_pack, async_release_pack
-from .const import DOMAIN, SECTION_KINDS, USER_URL
+from .const import DOMAIN, USER_URL
 
 
 class SectionSource:
@@ -95,9 +95,9 @@ class SectionSource:
 async def async_start_sources(
     hass: HomeAssistant, roots: dict[str, Path]
 ) -> dict[str, SectionSource]:
-    """Take the shared pack of every section; `roots`: user layer folder by section."""
+    """Take the shared pack of each section of `roots` (its user layer folder)."""
     sources = {}
-    for section in SECTION_KINDS:
+    for section in roots:
         pack = await async_acquire_pack(hass, section, DOMAIN, auto=True)
         sources[section] = SectionSource(hass, section, pack, roots[section])
     return sources

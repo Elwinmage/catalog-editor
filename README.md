@@ -1,8 +1,8 @@
-# ReefTech catalog editor
+# Catalog editor
 
 A Home Assistant integration to add and edit entries of the
 [ReefTech catalog](https://github.com/Elwinmage/reeftech-catalog) (equipment,
-supplements, parameters) from the UI, with the picture upload included.
+supplements, parameters, water tests) from the UI, with the picture upload included.
 
 An entry you save is written in the **user layer shared by every integration
 reading the catalog** (`<config>/reeftech_catalog/user/<section>/`): it is
@@ -12,11 +12,14 @@ itself (a pull request) comes on top of that.
 ## Install
 
 1. Install the integration (HACS custom repository, or copy
-   `custom_components/reeftech_catalog_editor`) and add it in *Settings →
+   `custom_components/catalog_editor`) and add it in *Settings →
    Devices & services*.
 2. It asks for the **client ID of a GitHub OAuth App** (see below). It is public
-   (no secret is needed with the device flow).
-3. Add the card to a dashboard: `type: custom:reeftech-catalog-editor-card`. The
+   (no secret is needed with the device flow). It also asks which **catalogs to
+   subscribe to** (equipment, supplements, parameters, water tests; all by default);
+   change them later in the *Configure* menu of the integration, which reloads it.
+   A catalog you are not subscribed to is neither downloaded nor editable.
+3. Add the card to a dashboard: `type: custom:catalog-editor-card`. The
    integration serves it and loads it by itself, nothing to add to the
    resources, and there is no build step.
 
@@ -34,7 +37,7 @@ everybody, and an update is seen by all.
 **Enable Device Flow**; the callback URL is not used (put any URL). The editor
 asks for the `public_repo` scope only: it forks the catalog, pushes a branch of
 the fork and opens the pull request. The token stays in Home Assistant's storage
-(`.storage/reeftech_catalog_editor`).
+(`.storage/catalog_editor`).
 
 ## How it works
 
@@ -61,16 +64,16 @@ the fork and opens the pull request. The token stays in Home Assistant's storage
 
 ## API (administrators only)
 
-Websocket commands `reeftech_catalog_editor/…`: `catalogs`, `refresh`, `form`, `entries`,
+Websocket commands `catalog_editor/…`: `catalogs`, `refresh`, `form`, `entries`,
 `entry`, `suggest_id`, `validate`, `save`, `delete`, `github_status`,
 `github_login`, `github_login_poll`, `github_logout`, `contribute`,
 `contributions`. Pictures are uploaded with
-`POST /api/reeftech_catalog_editor/image` (multipart field `file`); the answer
+`POST /api/catalog_editor/image` (multipart field `file`); the answer
 carries a `token` to give to `validate` / `save`.
 
 ## Synced files
 
-`custom_components/reeftech_catalog_editor/catalog_pack.py`,
+`custom_components/catalog_editor/catalog_pack.py`,
 `catalog_runtime.py` and `catalog_rules.py` are **copies** made by
 `scripts/sync_client.py` of the catalog repository. Do not edit them here.
 
@@ -79,7 +82,7 @@ carries a `token` to give to `validate` / `save`.
 ```
 pip install -r requirements.txt
 ruff check . && ruff format --check .
-pyright custom_components/reeftech_catalog_editor tests
+pyright custom_components/catalog_editor tests
 pytest --cov=custom_components --cov-fail-under=100
 cd tests/js && npm install && node --test   # the card, in jsdom
 ```

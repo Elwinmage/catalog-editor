@@ -22,7 +22,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.http import HomeAssistantView
 
-from .catalog_rules import DESCRIPTORS, Report, validate_draft
+from .catalog_rules import DESCRIPTORS, KNOWN_LANGS, Report, validate_draft
 from .catalog_runtime import SIGNAL_USER_CATALOG_CHANGED
 from .compat import vol
 from .const import DOMAIN, MAX_UPLOADS, SECTION_KINDS, UPLOAD_TTL_S, VIEW_GROUPS
@@ -47,6 +47,7 @@ from .images import MAX_UPLOAD_BYTES, ImageError, Visual, process_image
 from .schemas import SchemaStore
 from .source import SectionSource
 from .storage import UserCatalog, dump
+from .translate import MAX_TEXT, TranslateError, translate
 
 ALL_KINDS = sorted({kind for kinds in SECTION_KINDS.values() for kind in kinds})
 _TARGET = {
@@ -124,7 +125,9 @@ async def _target(
     section, kind = msg["section"], msg["kind"]
     if kind not in SECTION_KINDS[section]:
         raise _Refused("invalid_format", f"{section} has no {kind}")
-    source = data.sources[section]
+    source = data.sources.get(section)
+    if source is None:
+        raise _Refused("not_subscribed", f"The {section} catalog is not subscribed to")
     if source.installed is None:
         raise _Refused(
             "not_installed",
@@ -220,8 +223,8 @@ async def _parameters(data: EditorData, section: str) -> dict[str, dict[str, Any
     """
     if section != "water_tests":
         return {}
-    source = data.sources["parameters"]
-    if source.installed is None:
+    source = data.sources.get("parameters")
+    if source is None or source.installed is None:
         return {}
     view = await source.async_view()
     return {
@@ -280,8 +283,9 @@ def _report(report: Report) -> dict[str, list[str]]:
 def _catalogs(data: EditorData) -> list[dict[str, Any]]:
     """The state of each section: the pack downloaded, the release, the schemas."""
     result = []
-    for section, kinds in SECTION_KINDS.items():
-        pack = data.sources[section].pack
+    for section, source in data.sources.items():
+        kinds = SECTION_KINDS[section]
+        pack = source.pack
         result.append(
             {
                 "section": section,
@@ -313,7 +317,9 @@ async def ws_refresh(hass: HomeAssistant, msg: dict[str, Any]) -> list[dict[str,
     pack too (it is shared). A failure is reported in the `error` of the section.
     """
     data = _editor(hass)
-    sections = [msg["section"]] if "section" in msg else list(SECTION_KINDS)
+    sections = [msg["section"]] if "section" in msg else list(data.sources)
+    if any(section not in data.sources for section in sections):
+        raise _Refused("not_subscribed", "That catalog is not subscribed to")
     for section in sections:
         source = data.sources[section]
         await source.pack.async_check(force=True)
@@ -423,6 +429,25 @@ def _client(hass: HomeAssistant, data: EditorData) -> GithubClient:
     if data.contributions.token is None:
         raise _Refused("auth_required", "Sign in to GitHub first")
     return GithubClient(async_get_clientsession(hass), data.contributions.token)
+
+
+@_command(
+    {
+        vol.Required("text"): vol.All(str, vol.Length(min=1, max=MAX_TEXT)),
+        vol.Required("source"): vol.In(KNOWN_LANGS),
+        vol.Required("targets"): [vol.In(KNOWN_LANGS)],
+    },
+    "translate",
+)
+async def ws_translate(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
+    """Machine translation of a text, to pre-fill the languages of a field."""
+    try:
+        found = await translate(
+            async_get_clientsession(hass), msg["text"], msg["source"], msg["targets"]
+        )
+    except TranslateError as err:
+        raise _Refused("translate_failed", str(err)) from err
+    return {"translations": found}
 
 
 async def _signed_out(data: EditorData, err: GithubError) -> None:
@@ -570,8 +595,8 @@ def _released(data: EditorData, source: SectionSource, item: dict[str, Any]) -> 
 
 async def _retire(hass: HomeAssistant, data: EditorData, item: dict[str, Any]) -> None:
     """Once a merged entry reached the catalog, the local copy is redundant."""
-    source = data.sources[item["section"]]
-    if source.installed is None:
+    source = data.sources.get(item["section"])
+    if source is None or source.installed is None:
         return
     if await hass.async_add_executor_job(_released, data, source, item):
         await hass.async_add_executor_job(
@@ -612,7 +637,7 @@ async def ws_contributions(
 
 
 class ImageUploadView(HomeAssistantView):
-    """`POST /api/reeftech_catalog_editor/image` with a `file` field."""
+    """`POST /api/catalog_editor/image` with a `file` field."""
 
     url = f"/api/{DOMAIN}/image"
     name = f"api:{DOMAIN}:image"
@@ -656,6 +681,7 @@ def async_register_api(hass: HomeAssistant) -> None:
     for command in (
         ws_catalogs,
         ws_refresh,
+        ws_translate,
         ws_form,
         ws_entries,
         ws_entry,

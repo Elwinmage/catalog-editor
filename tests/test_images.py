@@ -8,7 +8,7 @@ import os
 import pytest
 from PIL import Image
 
-from custom_components.reeftech_catalog_editor import images
+from custom_components.catalog_editor import images
 
 
 def encode(picture: Image.Image, fmt: str) -> bytes:

@@ -9,12 +9,12 @@ from homeassistant.core import HomeAssistant
 
 from .const import DOMAIN, USER_URL
 
-CARD_FILE = Path(__file__).parent / "frontend" / "reeftech-catalog-editor-card.js"
-CARD_URL = f"/{DOMAIN}/reeftech-catalog-editor-card.js"
+CARD_FILE = Path(__file__).parent / "frontend" / "catalog-editor-card.js"
+CARD_URL = f"/{DOMAIN}/catalog-editor-card.js"
 
 
 async def async_register_card(hass: HomeAssistant) -> None:
-    """Make the card available as `type: custom:reeftech-catalog-editor-card`."""
+    """Make the card available as `type: custom:catalog-editor-card`."""
     if getattr(hass, "http", None) is None:
         return
     await hass.http.async_register_static_paths(

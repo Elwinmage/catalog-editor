@@ -1,0 +1,34 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Catalog editor",
+        "description": "Add and edit entries of the catalogs (equipment, supplements, parameters, water tests). They are usable at once by the integrations that read the catalogs. To propose entries to the catalog, register a GitHub OAuth App with the device flow enabled and paste its client id.",
+        "data": {
+          "client_id": "Client ID of the GitHub OAuth App",
+          "sections": "Catalogs to subscribe to"
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Catalogs",
+        "data": {
+          "sections": "Catalogs to subscribe to"
+        }
+      }
+    }
+  },
+  "selector": {
+    "sections": {
+      "options": {
+        "equipment": "Equipment",
+        "supplements": "Supplements",
+        "parameters": "Parameters",
+        "water_tests": "Water tests"
+      }
+    }
+  }
+}
