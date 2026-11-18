@@ -39,7 +39,7 @@ Create the app in a minute:
 1. Open <https://github.com/settings/applications/new> (sign in to GitHub).
 2. *Application name*: anything (e.g. `Catalog editor`). *Homepage URL* and
    *Authorization callback URL*: any address, e.g.
-   `https://github.com/Elwinmage/reeftech-catalog`; they are not used.
+   `https://github.com/Elwinmage/catalog-editor`; they are not used.
 3. Tick **Enable Device Flow**, then **Register application**.
 4. Copy the **Client ID** of the next page (no secret needed) into the
    integration (at setup, or later by removing and adding it again).

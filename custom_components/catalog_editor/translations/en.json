@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Catalog editor",
-        "description": "Add and edit entries of the catalogs. They are usable at once by the integrations that read them.\n\nTo **propose** entries to the catalog (pull requests), the editor needs the Client ID of a GitHub OAuth App of yours. Create it in one minute:\n\n1. Open [github.com/settings/applications/new](https://github.com/settings/applications/new) (sign in to GitHub if asked).\n2. *Application name*: anything (e.g. `Catalog editor`). *Homepage URL* and *Authorization callback URL*: any address, e.g. `https://github.com/Elwinmage/reeftech-catalog` (they are not used).\n3. Tick **Enable Device Flow**, then click **Register application**.\n4. Copy the **Client ID** shown on the next page (no secret is needed) and paste it below.",
+        "description": "Add and edit entries of the catalogs. They are usable at once by the integrations that read them.\n\nTo **propose** entries to the catalog (pull requests), the editor needs the Client ID of a GitHub OAuth App of yours. Create it in one minute:\n\n1. Open [github.com/settings/applications/new](https://github.com/settings/applications/new) (sign in to GitHub if asked).\n2. *Application name*: anything (e.g. `Catalog editor`). *Homepage URL* and *Authorization callback URL*: any address, e.g. `https://github.com/Elwinmage/catalog-editor` (they are not used).\n3. Tick **Enable Device Flow**, then click **Register application**.\n4. Copy the **Client ID** shown on the next page (no secret is needed) and paste it below.",
         "data": {
           "client_id": "Client ID of the GitHub OAuth App",
           "sections": "Catalogs to subscribe to"
