@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .catalogs import EXTERNAL_SECTIONS
+
 DOMAIN = "catalog_editor"
 
 #: Client id of the GitHub OAuth App (device flow enabled) used to sign in
@@ -17,6 +19,8 @@ SECTION_KINDS: dict[str, tuple[str, ...]] = {
     "supplements": ("supplement",),
     "parameters": ("parameter",),
     "water_tests": ("water_test",),
+    # the catalogs declared in catalogs.py (house-catalog: trees, objects)
+    **{section: tuple(kinds) for section, kinds in EXTERNAL_SECTIONS.items()},
 }
 
 #: Group of the merged view (catalog_pack.build_view) holding each kind
@@ -27,6 +31,12 @@ VIEW_GROUPS = {
     "supplement": "items",
     "parameter": "items",
     "water_test": "items",
+    # a kind of a declared catalog is listed under the name of its folder
+    **{
+        kind: folder
+        for kinds in EXTERNAL_SECTIONS.values()
+        for kind, (folder, _) in kinds.items()
+    },
 }
 
 #: Where the visuals of the user layer are served: <url>/<section>/...

@@ -13,6 +13,9 @@ from pytest_homeassistant_custom_component.test_util.aiohttp import (
 )
 
 UP = "Elwinmage/reeftech-catalog"
+HOUSE = "Elwinmage/house-catalog"
+#: The catalog repositories; a pull request is a number in one of them
+UPSTREAMS = (UP, HOUSE)
 API = re.compile(r"https://api\.github\.com/.*")
 
 
@@ -21,13 +24,17 @@ def _sha(*parts: Any) -> str:
 
 
 class FakeGithub:
-    """The repositories of one upstream and, once forked, of one user."""
+    """The catalog repositories and, once forked, the ones of one user.
+
+    `forked`, `pulls` and `files` given at creation are about the reef catalog,
+    which most tests use; `forks` and `pulls_of` hold the same per repository.
+    """
 
     def __init__(self, aioclient_mock, files: dict[str, bytes] | None = None) -> None:
         self.login = "elwin"
         self.valid = True  # False: every call answers 401
         self.status: int | None = None  # forced answer of every call
-        self.forked = False
+        self.forks: set[str] = set()  # upstreams the user has forked
         self.can_push = False  # the account may push to the upstream itself
         self.fork_polls = 0  # GETs of the fork answering 404 once requested
         self.fork_kind = "fork"  # or "plain": a repository that is not a fork
@@ -35,15 +42,31 @@ class FakeGithub:
         self.trees: dict[str, dict[str, str]] = {}
         self.commits: dict[str, tuple[str, str | None]] = {}
         self.refs: dict[tuple[str, str], str] = {}
-        self.pulls: dict[int, dict[str, Any]] = {}
+        self.pulls_of: dict[str, dict[int, dict[str, Any]]] = {
+            repo: {} for repo in UPSTREAMS
+        }
+        self.pulls = self.pulls_of[UP]
         self.calls: list[tuple[str, str]] = []
         tree = {path: self._blob(blob) for path, blob in (files or {}).items()}
         self.trees[_sha(tree)] = tree
         commit = _sha("root", tree)
         self.commits[commit] = (_sha(tree), None)
         self.refs[(UP, "main")] = commit
+        empty: dict[str, str] = {}
+        self.trees[_sha(empty)] = empty
+        self.commits[_sha("root", empty)] = (_sha(empty), None)
+        self.refs[(HOUSE, "main")] = _sha("root", empty)
         for method in ("get", "post", "patch"):
             getattr(aioclient_mock, method)(API, side_effect=self.handle)
+
+    @property
+    def forked(self) -> bool:
+        """The user has a fork of the reef catalog."""
+        return UP in self.forks
+
+    @forked.setter
+    def forked(self, value: bool) -> None:
+        (self.forks.add if value else self.forks.discard)(UP)
 
     def _blob(self, blob: bytes) -> str:
         sha = _sha(base64.b64encode(blob).decode())
@@ -74,25 +97,28 @@ class FakeGithub:
         if match is None:
             return self.reply(method, url, 404, {"message": "Not Found"})
         repo, rest = match.group(1), match.group(2) or ""
-        fork = f"{self.login}/{UP.split('/')[1]}"
-        known = repo == UP or (repo == fork and self.forked)
-        if repo == fork and repo != UP and rest == "" and method == "GET":
-            if self.forked and self.fork_polls <= 0:
-                parent = {"full_name": UP} if self.fork_kind == "fork" else None
+        # The upstream the repository is, or is the fork of
+        up = next((u for u in UPSTREAMS if repo.split("/")[1] == u.split("/")[1]), UP)
+        fork = f"{self.login}/{up.split('/')[1]}"
+        forked = up in self.forks
+        known = repo == up or (repo == fork and forked)
+        if repo == fork and repo != up and rest == "" and method == "GET":
+            if forked and self.fork_polls <= 0:
+                parent = {"full_name": up} if self.fork_kind == "fork" else None
                 body = {"fork": self.fork_kind == "fork", "parent": parent}
                 return self.reply(method, url, body=body)
-            self.fork_polls -= 1 if self.forked else 0
+            self.fork_polls -= 1 if forked else 0
             return self.reply(method, url, 404, {"message": "Not Found"})
         if not known:
             return self.reply(method, url, 404, {"message": "Not Found"})
-        if rest == "" and repo == UP:
+        if rest == "" and repo == up:
             return self.reply(
                 method,
                 url,
                 body={"default_branch": "main", "permissions": {"push": self.can_push}},
             )
         if rest == "/forks":
-            self.forked = True
+            self.forks.add(up)
             return self.reply(method, url, 202, {})
         if rest.startswith("/contents/"):
             return self._contents(method, url, repo, rest[len("/contents/") :], query)
@@ -110,20 +136,21 @@ class FakeGithub:
             sha = _sha("commit", data["tree"], data["parents"], data["message"])
             self.commits[sha] = (data["tree"], data["parents"][0])
             return self.reply(method, url, 201, {"sha": sha})
+        pulls = self.pulls_of[up]
         if rest == "/pulls":
-            number = len(self.pulls) + 1
+            number = len(pulls) + 1
             branch = data["head"].split(":", 1)[1]
-            self.pulls[number] = {
+            pulls[number] = {
                 "number": number,
-                "html_url": f"https://github.com/{UP}/pull/{number}",
+                "html_url": f"https://github.com/{up}/pull/{number}",
                 "state": "open",
                 "merged_at": None,
                 "head": {"ref": branch},
                 "request": data,
             }
-            return self.reply(method, url, 201, self.pulls[number])
+            return self.reply(method, url, 201, pulls[number])
         if rest.startswith("/pulls/"):
-            return self.reply(method, url, body=self.pulls[int(rest.rsplit("/", 1)[1])])
+            return self.reply(method, url, body=pulls[int(rest.rsplit("/", 1)[1])])
         return self.reply(
             method, url, 404, {"message": "Not Found"}
         )  # pragma: no cover

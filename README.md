@@ -2,7 +2,9 @@
 
 A Home Assistant integration to add and edit entries of the
 [ReefTech catalog](https://github.com/Elwinmage/reeftech-catalog) (equipment,
-supplements, parameters, water tests) from the UI, with the picture upload included.
+supplements, parameters, water tests) and of the
+[house catalog](https://github.com/Elwinmage/house-catalog) (trees and objects
+of the house view) from the UI, with the picture upload included.
 
 An entry you save is written in the **user layer shared by every integration
 reading the catalog** (`<config>/reeftech_catalog/user/<section>/`): it is
@@ -16,7 +18,8 @@ itself (a pull request) comes on top of that.
    Devices & services*.
 2. It asks for the **client ID of a GitHub OAuth App** (see below). It is public
    (no secret is needed with the device flow). It also asks which **catalogs to
-   subscribe to** (equipment, supplements, parameters, water tests; all by default);
+   subscribe to** (equipment, supplements, parameters, water tests, trees, objects;
+   all by default);
    change them later in the *Configure* menu of the integration, which reloads it.
    A catalog you are not subscribed to is neither downloaded nor editable.
 3. Add the card to a dashboard: `type: custom:catalog-editor-card`. The
@@ -54,8 +57,17 @@ storage (`.storage/catalog_editor`).
 - The **form** of each kind of entry is generated from the JSON Schemas
   published by the catalog releases (`schema.zip`), so a new field of the
   catalog shows up here without a new version of the editor or of the card.
-- A draft is checked with the **same rules as the catalog CI**
-  (`catalog_rules.py`): what the editor accepts is what the CI accepts.
+- A draft is checked with the **same rules as the catalog CI**: what the editor
+  accepts is what the CI accepts. Each catalog repository owns its rules and
+  copies them here with its `sync_client.py` (`catalog_rules.py` from
+  reeftech-catalog, `house_catalog_rules.py` from house-catalog); `rules.py`
+  picks the ones of a kind of entry.
+- The catalog client only knows the sections of reeftech-catalog. Another
+  catalog describes itself (repository, sections, layout) in a module it copies
+  here (`house_catalog_sections.py`), which `catalogs.py` declares to the
+  client: a new section of that catalog normally needs only its translations
+  here.
+- A **colour** of an entry (trees, objects) is picked or typed as `#rrggbb`.
 - Pictures are normalised (transparent WebP, 512 px and 128 px, size limits).
 - The editor reads the shared pack plus the shared user layer itself, so it sees
   the same merged view as the integrations. A consumer too old for a new release
@@ -68,6 +80,9 @@ storage (`.storage/catalog_editor`).
   your fork. Saving again while the pull request is open adds a commit to it.
   Once it is merged and released, your local copy is removed automatically when
   it is identical to the catalog's (otherwise it stays; delete it by hand).
+- A pull request goes to the **repository of the catalog** of its entry.
+  *Propose all my entries* therefore opens one pull request per repository
+  when your entries belong to both.
 - The list of your pull requests is filtered: **Open** (default), **Merged**
   (not yet in a release), **In the catalog** (released) and **All**; refused
   (closed) pull requests only show in *All*, with a badge.

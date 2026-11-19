@@ -55,7 +55,13 @@ async def test_catalogs(hass, aioclient_mock, hass_ws_client):
         "supplements",
         "parameters",
         "water_tests",
+        "trees",
+        "objects",
     ]
+    assert result[4]["kinds"] == ["tree"] and result[5]["kinds"] == ["object"]
+    # ...each from the repository that publishes it
+    assert result[4]["installed"] == result[5]["installed"] == "2026.11.0"
+    assert result[4]["schemas"] is True
     # The packs are the real ones, downloaded (an empty release is served)
     assert result[0] == {
         "section": "equipment",

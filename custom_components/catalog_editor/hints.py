@@ -7,6 +7,8 @@ point to another entry, how an id is suggested, which kinds have a visual.
 
 from __future__ import annotations
 
+from .catalogs import EXTERNAL_KINDS
+
 #: Field path -> group of the merged view its value is chosen from. A path uses
 #: dots for objects and `[]` for the items of an array.
 REFS: dict[str, dict[str, str]] = {
@@ -23,6 +25,8 @@ ID_FROM: dict[str, tuple[str, ...]] = {
     "supplement": ("brand", "name"),
     "parameter": ("symbol",),
     "water_test": ("brand", "name"),
+    # an entry of a declared catalog (catalogs.py) is named after its English name
+    **{kind: ("name.en",) for kind in EXTERNAL_KINDS},
 }
 
 #: Field holding the brand of the kinds that have one: chosen among the brands
@@ -37,4 +41,5 @@ HAS_VISUAL = {
     "supplement": True,
     "parameter": True,
     "water_test": True,
+    **dict.fromkeys(EXTERNAL_KINDS, True),
 }

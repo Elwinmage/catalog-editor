@@ -27,7 +27,9 @@
         "equipment": "Equipment",
         "supplements": "Supplements",
         "parameters": "Parameters",
-        "water_tests": "Water tests"
+        "water_tests": "Water tests",
+        "trees": "Trees (house view)",
+        "objects": "Objects (house view)"
       }
     }
   }

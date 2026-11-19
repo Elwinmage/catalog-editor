@@ -18,22 +18,34 @@ from custom_components.catalog_editor.catalog_pack import Layer
 from custom_components.catalog_editor.const import DOMAIN
 
 SCHEMAS = Path(__file__).parent / "fixtures" / "schema"
+HOUSE_SCHEMAS = Path(__file__).parent / "fixtures" / "house_schema"
 BASE = "https://github.com/Elwinmage/reeftech-catalog/releases/download"
+HOUSE_BASE = "https://github.com/Elwinmage/house-catalog/releases/download"
 KINDS = {
     "equipment": ("item", "category", "task"),
     "supplements": ("supplement",),
     "parameters": ("parameter",),
     "water_tests": ("water_test",),
+    "trees": ("tree",),
+    "objects": ("object",),
 }
+#: Sections published by house-catalog, with schemas of their own
+HOUSE = ("trees", "objects")
+
+
+def base_of(section: str) -> str:
+    """Where the releases of a section are downloaded from."""
+    return HOUSE_BASE if section in HOUSE else BASE
 
 
 def schema_zip(section: str, extra: dict[str, bytes] | None = None) -> bytes:
     """The schema.zip of a release, built from the schemas of the catalog."""
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as archive:
+        folder = HOUSE_SCHEMAS if section in HOUSE else SCHEMAS
         for kind in ("common", *KINDS[section]):
             name = f"{kind}.schema.json"
-            archive.writestr(name, (SCHEMAS / name).read_bytes())
+            archive.writestr(name, (folder / name).read_bytes())
         for name, blob in (extra or {}).items():
             archive.writestr(name, blob)
     return buffer.getvalue()
@@ -56,18 +68,17 @@ def manifest_of(
     }
 
 
-def serve(
-    aioclient_mock, sections=("equipment", "supplements", "parameters", "water_tests")
-) -> None:
-    """Serve the manifest and the schemas of the sections."""
+def serve(aioclient_mock, sections=tuple(KINDS)) -> None:
+    """Serve the manifest and the schemas of the sections, each from its repository."""
     aioclient_mock.clear_requests()
     for section in sections:
         blob = schema_zip(section)
         manifest = manifest_of(section, blob)
+        base = base_of(section)
         aioclient_mock.get(
-            f"{BASE}/{section}-latest/manifest.json", text=json.dumps(manifest)
+            f"{base}/{section}-latest/manifest.json", text=json.dumps(manifest)
         )
-        aioclient_mock.get(f"{BASE}/{manifest['schema']['archive']}", content=blob)
+        aioclient_mock.get(f"{base}/{manifest['schema']['archive']}", content=blob)
 
 
 def interval(default: int = 1) -> dict[str, Any]:

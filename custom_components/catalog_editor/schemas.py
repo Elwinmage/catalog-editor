@@ -19,8 +19,8 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from jsonschema import Draft202012Validator
 
 from .catalog_pack import PackClient, PackEntry, PackError, extract_entry
-from .catalog_rules import load_validators
 from .const import DOMAIN, SECTION_KINDS
+from .rules import load_validators
 
 _LOGGER = logging.getLogger(__name__)
 

@@ -47,6 +47,8 @@ async def test_options_change_the_subscriptions(hass, aioclient_mock):
         "supplements",
         "parameters",
         "water_tests",
+        "trees",
+        "objects",
     ]
     form = await hass.config_entries.options.async_init(entry.entry_id)
     assert form["type"] is FlowResultType.FORM and form["step_id"] == "init"

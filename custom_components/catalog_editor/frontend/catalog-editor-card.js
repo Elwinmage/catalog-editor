@@ -18,12 +18,16 @@
       catalog_supplements: "Supplements",
       catalog_parameters: "Parameters",
       catalog_water_tests: "Water tests",
+      catalog_trees: "Trees (house view)",
+      catalog_objects: "Objects (house view)",
       kind_task: "Tasks",
       kind_category: "Categories",
       kind_item: "Items",
       kind_supplement: "Supplements",
       kind_parameter: "Parameters",
       kind_water_test: "Water tests",
+      kind_tree: "Trees",
+      kind_object: "Objects",
       new: "New",
       search: "Search…",
       back: "Back",
@@ -119,12 +123,16 @@
       catalog_supplements: "Suppléments",
       catalog_parameters: "Paramètres",
       catalog_water_tests: "Tests d'eau",
+      catalog_trees: "Arbres (vue maison)",
+      catalog_objects: "Objets (vue maison)",
       kind_task: "Tâches",
       kind_category: "Catégories",
       kind_item: "Éléments",
       kind_supplement: "Suppléments",
       kind_parameter: "Paramètres",
       kind_water_test: "Tests d'eau",
+      kind_tree: "Arbres",
+      kind_object: "Objets",
       new: "Nouveau",
       search: "Rechercher…",
       back: "Retour",
@@ -236,6 +244,8 @@
       border: 1px solid var(--divider-color); border-radius: 6px; padding: 6px 8px; box-sizing: border-box; max-width: 100%;
     }
     input[type=text], input[type=search], input:not([type]), select, textarea { width: 100%; }
+    .color { display: flex; gap: 8px; align-items: center; }
+    .color input[type=color] { flex: none; width: 44px; height: 32px; padding: 0; border: none; background: none; cursor: pointer; }
     input[type=number] { width: 7em; }
     input[type=checkbox] { width: auto; }
     textarea { min-height: 5em; font-family: monospace; }
@@ -753,6 +763,8 @@
           return this._text(field, get, set);
         case "icon":
           return this._icon(field, get, set);
+        case "color":
+          return this._color(field, get, set);
         case "brand":
           return this._brand(field, get, set);
         case "number":
@@ -789,6 +801,23 @@
         placeholder: field.type === "icon" ? "mdi:wrench" : undefined,
         oninput: (event) => set(event.target.value),
       });
+    }
+
+    // Colour (#rrggbb): the picker of the browser next to the text, each following the other
+    _color(field, get, set) {
+      const valid = (value) => /^#[0-9a-f]{6}$/.test(value);
+      const text = el("input", { type: "text", value: get() ?? "", maxLength: 7, placeholder: "#rrggbb" });
+      const picker = el("input", { type: "color", value: valid(text.value) ? text.value : "#808080" });
+      text.addEventListener("input", () => {
+        const value = text.value.trim().toLowerCase();
+        if (valid(value)) picker.value = value;
+        set(value);
+      });
+      picker.addEventListener("input", () => {
+        text.value = picker.value.toLowerCase();
+        set(text.value);
+      });
+      return el("div", { class: "color" }, picker, text);
     }
 
     // Brand: a free text with the brands of the catalogs as suggestions. A brand that
@@ -1153,6 +1182,7 @@
           for (const sub of item.fields) {
             if (sub.required && sub.type === "schedule") row[sub.name] = { type: "interval", unit: "months", every: { default: 1, min: 1, max: 12 } };
             else if (sub.default !== undefined) row[sub.name] = sub.default;
+            else if (sub.required && sub.type === "color") row[sub.name] = "#808080";
           }
           return row;
         }
@@ -1161,6 +1191,8 @@
           return item.minimum ?? 1;
         case "enum":
           return item.options[0];
+        case "color":
+          return "#808080";
         default:
           return "";
       }
@@ -1360,7 +1392,9 @@
         if (!result.submitted) {
           s.message = { kind: "error", text: result.errors.join(" ") };
         } else if (request.batch) {
-          s.message = { kind: "info", text: `${this.t("proposed_batch")} ${result.count} (#${result.number})` };
+          // One pull request per catalog repository
+          const pulls = (result.pulls || [result]).map((pull) => `#${pull.number}`).join(", ");
+          s.message = { kind: "info", text: `${this.t("proposed_batch")} ${result.count} (${pulls})` };
           s.mode = "list";
         } else {
           s.message = { kind: "info", text: `${this.t(result.appended ? "proposed_update" : "proposed")}: #${result.number}` };

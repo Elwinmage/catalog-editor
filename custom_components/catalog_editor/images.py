@@ -12,7 +12,7 @@ from typing import cast
 
 from PIL import Image, UnidentifiedImageError
 
-from .catalog_rules import ASSET_FILES
+from .rules import ASSET_FILES
 
 IMAGE_SIDE = 512
 THUMB_SIDE = 128

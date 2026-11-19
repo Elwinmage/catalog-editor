@@ -16,7 +16,8 @@ from pathlib import Path
 from typing import Any
 
 from .catalog_pack import KIND_LAYOUT, shared_user_parts
-from .catalog_rules import DESCRIPTORS
+from .catalogs import EXTERNAL_KINDS
+from .rules import DESCRIPTORS
 
 _PACK_KINDS = {
     "task": "tasks",
@@ -25,6 +26,8 @@ _PACK_KINDS = {
     "supplement": "supplement",
     "parameter": "parameter",
     "water_test": "water_test",
+    # the kinds of the declared catalogs (catalogs.py) have the same name in a pack
+    **{kind: kind for kind in EXTERNAL_KINDS},
 }
 
 

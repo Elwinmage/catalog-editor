@@ -13,9 +13,9 @@ import re
 import unicodedata
 from typing import Any
 
-from .catalog_rules import ASSET_FILES, KNOWN_LANGS
 from .const import SECTION_KINDS
 from .hints import BRAND_FIELD, HAS_VISUAL, ID_FROM, REFS
+from .rules import ASSET_FILES, KNOWN_LANGS
 
 _DEF_RE = re.compile(r"#/\$defs/([A-Za-z0-9_]+)$")
 #: Shared definitions that are a widget of their own
@@ -24,6 +24,7 @@ _WIDGETS = {
     "icon": "icon",
     "schedule": "schedule",
     "bounded_int": "bounded_int",
+    "color": "color",
 }
 _CONSTRAINTS = (
     "minLength",

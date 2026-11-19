@@ -8,7 +8,7 @@ import json
 import zipfile
 from pathlib import Path
 
-from conftest import BASE, manifest_of, schema_zip, serve, setup_editor
+from conftest import BASE, KINDS, base_of, manifest_of, schema_zip, serve, setup_editor
 from homeassistant.setup import async_setup_component
 
 from custom_components.catalog_editor.catalog_runtime import (
@@ -55,14 +55,16 @@ def equipment_pack(hass) -> Path:
     return root
 
 
-SECTIONS = ("equipment", "supplements", "parameters", "water_tests")
+SECTIONS = tuple(KINDS)
 
 
 def offline(aioclient_mock) -> None:
     """GitHub answers 404 for every release."""
     aioclient_mock.clear_requests()
     for section in SECTIONS:
-        aioclient_mock.get(f"{BASE}/{section}-latest/manifest.json", status=404)
+        aioclient_mock.get(
+            f"{base_of(section)}/{section}-latest/manifest.json", status=404
+        )
 
 
 def release(aioclient_mock, section: str, version: str, items: dict[str, dict]):

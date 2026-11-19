@@ -23,7 +23,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.http import HomeAssistantView
 
-from .catalog_rules import DESCRIPTORS, KNOWN_LANGS, Report, validate_draft
+from .catalog_pack import repo_of
 from .catalog_runtime import SIGNAL_USER_CATALOG_CHANGED
 from .compat import vol
 from .const import DOMAIN, MAX_UPLOADS, SECTION_KINDS, UPLOAD_TTL_S, VIEW_GROUPS
@@ -31,6 +31,7 @@ from .context import (
     build_context,
     count_brands,
     entry_label,
+    house_context,
     list_entries,
     locate_visual,
     preferred_spellings,
@@ -48,6 +49,7 @@ from .github import (
 )
 from .hints import HAS_VISUAL
 from .images import MAX_UPLOAD_BYTES, ImageError, Visual, process_image
+from .rules import DESCRIPTORS, HOUSE_KINDS, KNOWN_LANGS, Report, validate_draft
 from .schemas import SchemaStore
 from .source import SectionSource
 from .storage import UserCatalog, dump
@@ -258,15 +260,19 @@ async def _check(
     files = {name: len(blob) for name, blob in visuals.items()}
     if kind != "task":
         files[DESCRIPTORS[kind]] = len(dump(msg["data"]))
-    context = build_context(
-        target.view,
-        target.section,
-        exclude=(kind, entry_id),
-        parameters=await _parameters(target.data, target.section),
-        brands=preferred_spellings(
-            await _brand_counts(target.data, (target.section, kind, entry_id))
-        ),
-    )
+    context: Any
+    if kind in HOUSE_KINDS:
+        context = house_context(target.view, target.section, (kind, entry_id))
+    else:
+        context = build_context(
+            target.view,
+            target.section,
+            exclude=(kind, entry_id),
+            parameters=await _parameters(target.data, target.section),
+            brands=preferred_spellings(
+                await _brand_counts(target.data, (target.section, kind, entry_id))
+            ),
+        )
     report = validate_draft(
         kind,
         entry_id,
@@ -467,10 +473,13 @@ def _editor(hass: HomeAssistant) -> EditorData:
     return data
 
 
-def _client(hass: HomeAssistant, data: EditorData) -> GithubClient:
+def _client(hass: HomeAssistant, data: EditorData, section: str) -> GithubClient:
+    """A GitHub client on the repository publishing a section."""
     if data.contributions.token is None:
         raise _Refused("auth_required", "Sign in to GitHub first")
-    return GithubClient(async_get_clientsession(hass), data.contributions.token)
+    return GithubClient(
+        async_get_clientsession(hass), data.contributions.token, repo_of(section)
+    )
 
 
 @_command(
@@ -566,7 +575,7 @@ async def ws_contribute(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, A
         )
     data = target.data
     section, kind, entry_id = target.section, target.kind, msg["entry_id"]
-    client = _client(hass, data)
+    client = _client(hass, data, section)
     if not await hass.async_add_executor_job(data.catalog.has, section, kind, entry_id):
         raise _Refused("no_user_copy", "Save the entry first")
     entry = await hass.async_add_executor_job(
@@ -666,13 +675,18 @@ async def ws_pending(hass: HomeAssistant, msg: dict[str, Any]) -> list[dict[str,
 async def ws_contribute_batch(
     hass: HomeAssistant, msg: dict[str, Any]
 ) -> dict[str, Any]:
-    """Propose several entries of the user as ONE pull request, a commit each."""
+    """Propose several entries of the user as ONE pull request, a commit each.
+
+    One pull request per catalog repository: entries of the house catalog do not
+    travel with the ones of the reef catalog.
+    """
     data = _editor(hass)
     if not msg["attest"]:
         raise _Refused(
             "attestation_required", "Certify the pictures are yours (CC BY 4.0)"
         )
-    client = _client(hass, data)
+    if data.contributions.token is None:
+        raise _Refused("auth_required", "Sign in to GitHub first")
     batch: list[BatchEntry] = []
     errors: list[str] = []
     warnings: list[str] = []
@@ -714,37 +728,55 @@ async def ws_contribute_batch(
         )
     if errors:
         return {"submitted": False, "errors": errors, "warnings": warnings}
-    try:
-        pull, done, skipped = await contribute_batch(
-            client, str(data.contributions.login), batch
+    by_repo: dict[str, list[BatchEntry]] = {}
+    for entry in batch:
+        by_repo.setdefault(repo_of(entry.section), []).append(entry)
+    pulls: list[dict[str, Any]] = []
+    skipped: list[BatchEntry] = []
+    for repo, entries in by_repo.items():
+        client = _client(hass, data, entries[0].section)
+        try:
+            pull, done, same = await contribute_batch(
+                client, str(data.contributions.login), entries
+            )
+        except GithubError as err:
+            if err.code == "no_change" and len(by_repo) > 1:
+                skipped += entries  # this catalog has them all, another may not
+                continue
+            await _signed_out(data, err)
+            raise
+        skipped += same
+        now = datetime.now(UTC).isoformat(timespec="seconds")
+        await data.contributions.async_record(
+            *(
+                {
+                    "section": entry.section,
+                    "kind": entry.kind,
+                    "id": entry.entry_id,
+                    "label": entry.label,
+                    "number": pull.number,
+                    "url": pull.url,
+                    "branch": pull.branch,
+                    "state": pull.state,
+                    "update": update,
+                    "created": now,
+                    "released": False,
+                }
+                for entry, update in done
+            )
         )
-    except GithubError as err:
-        await _signed_out(data, err)
-        raise
-    now = datetime.now(UTC).isoformat(timespec="seconds")
-    await data.contributions.async_record(
-        *(
-            {
-                "section": entry.section,
-                "kind": entry.kind,
-                "id": entry.entry_id,
-                "label": entry.label,
-                "number": pull.number,
-                "url": pull.url,
-                "branch": pull.branch,
-                "state": pull.state,
-                "update": update,
-                "created": now,
-                "released": False,
-            }
-            for entry, update in done
+        pulls.append(
+            {"repo": repo, "number": pull.number, "url": pull.url, "count": len(done)}
         )
-    )
+    if not pulls:
+        raise GithubError("no_change", "Nothing differs from the catalogs")
     return {
         "submitted": True,
-        "number": pull.number,
-        "url": pull.url,
-        "count": len(done),
+        # The first pull request, for a card that shows a single one
+        "number": pulls[0]["number"],
+        "url": pulls[0]["url"],
+        "pulls": pulls,
+        "count": sum(pull["count"] for pull in pulls),
         "skipped": [f"{entry.kind}/{entry.entry_id}" for entry in skipped],
         "warnings": warnings,
     }
@@ -797,15 +829,16 @@ async def ws_contributions(
     data = _editor(hass)
     store = data.contributions
     if store.token is not None:
-        client = _client(hass, data)
         try:
-            states: dict[int, str] = {}
+            # A pull request is a number in the repository of its section
+            states: dict[tuple[str, int], str] = {}
             for item in store.items:
                 if item["state"] == "open":
-                    number = item["number"]
-                    if number not in states:
-                        states[number] = (await client.pull(number)).state
-                    item["state"] = states[number]
+                    key = (repo_of(item["section"]), item["number"])
+                    if key not in states:
+                        client = _client(hass, data, item["section"])
+                        states[key] = (await client.pull(key[1])).state
+                    item["state"] = states[key]
         except GithubError as err:
             await _signed_out(data, err)  # offline or refused: the last state stays
     await _retire_merged(hass, data)

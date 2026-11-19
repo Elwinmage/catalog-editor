@@ -13,8 +13,10 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Protocol
 
+from . import house_catalog_rules as house
 from .catalog_pack import KIND_LAYOUT, Layer
 from .catalog_rules import Context, brand_key
+from .catalogs import EXTERNAL_SECTIONS
 from .const import VIEW_GROUPS, VIEW_KEYS
 
 
@@ -68,6 +70,19 @@ def _group(
         for entry_id, entry in entries.items()
         if exclude != (kind, entry_id)
     }
+
+
+def house_context(
+    view: dict[str, Any], section: str, exclude: tuple[str, str] | None = None
+) -> house.Context:
+    """What a draft of the house catalog is checked against: the others of its section.
+
+    The context of the house rules has one group per section, named after it.
+    """
+    entries: dict[str, dict[str, Any]] = {}
+    for kind in EXTERNAL_SECTIONS[section]:
+        entries |= _group(view, kind, exclude)
+    return house.Context(**{section: entries})
 
 
 def build_context(

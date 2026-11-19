@@ -43,10 +43,23 @@ const FORM = {
     { name: "sizes", required: false, type: "list", item: { type: "integer", minimum: 1 } },
     { name: "range", required: false, type: "object", fields: [{ name: "min", required: false, type: "number" }] },
     { name: "odd", required: false, type: "json" },
+    { name: "paint", required: false, type: "color" },
+    {
+      name: "parts",
+      required: false,
+      type: "list",
+      item: {
+        type: "object",
+        fields: [
+          { name: "color", required: true, type: "color" },
+          { name: "shade", required: false, type: "color" },
+        ],
+      },
+    },
   ],
 };
 
-function setup({ language = "en", providers = true } = {}) {
+function setup({ language = "en", providers = true, house = false } = {}) {
   const dom = new JSDOM("<!doctype html><body></body>", { runScripts: "outside-only", pretendToBeVisual: true });
   const { window } = dom;
   window.eval(CODE);
@@ -91,6 +104,12 @@ function setup({ language = "en", providers = true } = {}) {
             { section: "equipment", kinds: ["item", "category", "task"], installed: providers ? "1.0.0" : null, latest: "1.0.0", update_available: false, in_progress: false, error: null, schemas: true, schema_error: null },
             { section: "supplements", kinds: ["supplement"], installed: providers ? "1.0.0" : null, latest: "1.0.0", update_available: false, in_progress: false, error: null, schemas: true, schema_error: null },
             { section: "water_tests", kinds: ["water_test"], installed: providers ? "1.0.0" : null, latest: "1.0.0", update_available: false, in_progress: false, error: null, schemas: true, schema_error: null },
+            ...(house
+              ? [
+                  { section: "trees", kinds: ["tree"], installed: "1.0.0", latest: "1.0.0", update_available: false, in_progress: false, error: null, schemas: true, schema_error: null },
+                  { section: "objects", kinds: ["object"], installed: "1.0.0", latest: "1.0.0", update_available: false, in_progress: false, error: null, schemas: true, schema_error: null },
+                ]
+              : []),
           ];
         case "translate":
           if (state.translateError) throw { code: "translate_failed", message: "no translation service answered" };
@@ -145,7 +164,7 @@ function setup({ language = "en", providers = true } = {}) {
             state.github = { connected: false, login: null };
             throw { code: "auth_required", message: "GitHub login expired or revoked" };
           }
-          return { submitted: true, number: 9, url: "https://github.com/x/pull/9", count: 2, skipped: [] };
+          return state.batchResult || { submitted: true, number: 9, url: "https://github.com/x/pull/9", count: 2, skipped: [] };
         case "contribute":
           if (state.expireOnce) {
             state.expireOnce = false;
@@ -767,4 +786,67 @@ test("the redsea icon prefix is accepted only where its icon set is registered",
   assert.doesNotMatch(text(field(root, "icon")), /must start with/);
   type(window, input(), "fa:x");
   assert.match(text(field(root, "icon")), /must start with mdi:, redsea:/);
+});
+
+test("a colour is picked or typed, each following the other", async () => {
+  const { window, root, calls } = setup();
+  await openNewItem(window, root);
+  const [picker, hex] = field(root, "paint").querySelectorAll("input");
+  assert.equal(picker.type, "color");
+  assert.equal(hex.value, "");
+  assert.equal(picker.value, "#808080");
+  // Typed: upper case is accepted and written the way the catalog wants it
+  type(window, hex, "#3F7F35");
+  assert.equal(picker.value, "#3f7f35");
+  // Half typed: kept as it is (the checks will say so), the picker does not move
+  type(window, hex, "#3f7");
+  assert.equal(picker.value, "#3f7f35");
+  // Picked
+  type(window, picker, "#c98a2e");
+  assert.equal(hex.value, "#c98a2e");
+  // A new row of a list starts with the colours its schema requires
+  [...field(root, "parts").querySelectorAll("button")].find((b) => b.textContent.includes("+")).click();
+  const row = [...field(root, "parts").querySelectorAll("input[type=color]")];
+  assert.deepEqual(row.map((input) => input.value), ["#808080", "#808080"]);
+  await until(() => last(calls, "validate")?.data.parts);
+  const sent = last(calls, "validate").data;
+  assert.equal(sent.paint, "#c98a2e");
+  assert.deepEqual(JSON.parse(JSON.stringify(sent.parts)), [{ color: "#808080" }]);
+});
+
+test("the catalogs of the house view are listed with the others, in the language of the user", async () => {
+  for (const [language, trees, objects] of [
+    ["en", "Trees (house view)", "Objects (house view)"],
+    ["fr", "Arbres (vue maison)", "Objets (vue maison)"],
+  ]) {
+    const { root } = setup({ language, house: true });
+    await until(() => text(root).includes(trees));
+    assert.ok(text(root).includes(objects));
+    button(root, trees).click();
+    await until(() => button(root, language === "fr" ? "Arbres" : "Trees"));
+  }
+});
+
+test("a batch over two catalogs shows every pull request", async () => {
+  const { root, window, state } = setup();
+  state.github = { connected: true, login: "elwin" };
+  state.batchResult = {
+    submitted: true,
+    number: 3,
+    url: "https://github.com/a/pull/3",
+    pulls: [
+      { repo: "Elwinmage/house-catalog", number: 3, url: "https://github.com/a/pull/3", count: 1 },
+      { repo: "Elwinmage/reeftech-catalog", number: 5, url: "https://github.com/b/pull/5", count: 1 },
+    ],
+    count: 2,
+    skipped: [],
+  };
+  await until(() => button(root, "Propose all my entries"));
+  button(root, "Propose all my entries").click();
+  await until(() => text(root).includes("Rinse"));
+  const attest = [...root.querySelectorAll("input[type=checkbox]")].at(-1);
+  attest.checked = true;
+  change(window, attest);
+  button(root, "Propose the selected entries").click();
+  await until(() => text(root).includes("Pull request opened, entries: 2 (#3, #5)"));
 });

@@ -6,8 +6,9 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from .catalog_rules import ASSET_FILES, DESCRIPTORS, FOLDERS
+from .catalogs import EXTERNAL_KINDS
 from .github import GithubClient, GithubError, PullRequest
+from .rules import ASSET_FILES, DESCRIPTORS, FOLDERS
 from .storage import dump
 
 LICENCE = (
@@ -144,7 +145,16 @@ class BatchEntry:
 
 #: What an entry may refer to comes first: a pull request is reviewed (and its
 #: commits read) from the tasks to the items using them
-KIND_ORDER = ("task", "category", "parameter", "supplement", "item", "water_test")
+KIND_ORDER = (
+    "task",
+    "category",
+    "parameter",
+    "supplement",
+    "item",
+    "water_test",
+    # the declared catalogs (catalogs.py), whose entries refer to nothing
+    *EXTERNAL_KINDS,
+)
 
 
 def batch_order(entries: list[BatchEntry]) -> list[BatchEntry]:
