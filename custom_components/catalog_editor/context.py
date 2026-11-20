@@ -61,6 +61,39 @@ def read_descriptor(
     return None
 
 
+#: What the card needs of a descriptor to play the animation of an atlas
+ATLAS_FIELDS = ("frame", "columns", "clips", "facing", "degraded")
+
+
+def read_atlas(
+    source: HasLayers, kind: str, entry_id: str
+) -> tuple[dict[str, Any], str] | None:
+    """The animation of an entry: its descriptor keys and the URL of its atlas.
+
+    From the most specific layer having the entry (the descriptor the form
+    edits); None when that entry has no atlas file to play.
+    """
+    folder, descriptor = KIND_LAYOUT[kind]
+    for layer in reversed(source.layers()):
+        where = layer.root / folder / entry_id
+        try:
+            data = json.loads((where / str(descriptor)).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        atlas = data.get("atlas") if isinstance(data, dict) else None
+        name = atlas.get("1x") if isinstance(atlas, dict) else None
+        if (
+            not isinstance(name, str)
+            or "/" in name
+            or not (where / name).is_file()
+            or not all(field in data for field in ("frame", "columns", "clips"))
+        ):
+            return None
+        info = {field: data[field] for field in ATLAS_FIELDS if field in data}
+        return info, f"{layer.url}/{folder}/{entry_id}/{name}?v={layer.stamp}"
+    return None
+
+
 def _group(
     view: dict[str, Any], kind: str, exclude: tuple[str, str] | None
 ) -> dict[str, dict[str, Any]]:

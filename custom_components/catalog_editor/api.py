@@ -38,6 +38,7 @@ from .const import (
     VIEW_GROUPS,
 )
 from .context import (
+    ATLAS_FIELDS,
     build_context,
     count_brands,
     entry_label,
@@ -45,6 +46,7 @@ from .context import (
     list_entries,
     locate_visual,
     preferred_spellings,
+    read_atlas,
     read_descriptor,
     strip_entry,
 )
@@ -725,6 +727,34 @@ async def ws_image_build(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, 
     }
 
 
+@_command({**_ENTRY, vol.Optional("atlas"): str}, "atlas_view")
+async def ws_atlas_view(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
+    """What the card plays to show the animation of a species.
+
+    The atlas just built (its token), else the one the entry has: the sheet (a
+    `data:` URL for a built one, the URL it is served at otherwise) and the
+    layout of its frames and clips.
+    """
+    target = await _target(hass, msg, need_schemas=False)
+    if target.kind not in ATLAS_KINDS:
+        raise _Refused("no_atlas", f"A {target.kind} has no animation")
+    pending = _atlas(target, msg)
+    if pending is not None:
+        name = pending.keys["atlas"]["1x"]
+        blob = pending.files[name]
+        info = {k: pending.keys[k] for k in ATLAS_FIELDS if k in pending.keys}
+        return {
+            **info,
+            "image": f"data:image/webp;base64,{base64.b64encode(blob).decode()}",
+        }
+    found = await hass.async_add_executor_job(
+        read_atlas, target.source, target.kind, msg["entry_id"]
+    )
+    if found is None:
+        raise _Refused("no_atlas", "This entry has no animation to play")
+    return {**found[0], "url": found[1]}
+
+
 # -- GitHub -----------------------------------------------------------------------
 
 
@@ -1209,6 +1239,7 @@ def async_register_api(hass: HomeAssistant) -> None:
         ws_image_prompt,
         ws_image_generate,
         ws_image_build,
+        ws_atlas_view,
     ):
         async_register_command(hass, command)
     if getattr(hass, "http", None) is not None:

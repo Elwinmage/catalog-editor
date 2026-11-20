@@ -19,7 +19,7 @@
         "data": {
           "sections": "Catalogues auxquels s'abonner",
           "image_provider": "Fournisseur d'images",
-          "image_key": "Clé API du fournisseur",
+          "image_key": "Clé API du fournisseur (Cloudflare : <identifiant de compte>:<jeton API>)",
           "image_model": "Modèle (vide : celui par défaut du fournisseur)",
           "clear_image_key": "Supprimer la clé API enregistrée"
         }

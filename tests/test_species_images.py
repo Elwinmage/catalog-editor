@@ -101,7 +101,10 @@ async def test_gemini_gives_the_picture(hass, aioclient_mock):
     request = aioclient_mock.mock_calls[0]
     assert request[2] == {
         "contents": [{"parts": [{"text": "prompt"}]}],
-        "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]},
+        "generationConfig": {
+            "responseModalities": ["TEXT", "IMAGE"],
+            "imageConfig": {"aspectRatio": "3:2"},
+        },
     }
     assert request[3]["x-goog-api-key"] == "k"
     aioclient_mock.clear_requests()
@@ -209,6 +212,95 @@ async def test_openai_gives_the_picture(hass, aioclient_mock):
             await generate_image(session, "openai", "k", "", "p")
 
 
+ACCOUNT = "0123456789abcdef0123456789abcdef"
+
+
+async def test_cloudflare_gives_the_picture(hass, aioclient_mock):
+    from homeassistant.helpers.aiohttp_client import async_get_clientsession
+
+    session = async_get_clientsession(hass)
+    url = image_providers.CLOUDFLARE_URL.format(
+        account=ACCOUNT, model="@cf/black-forest-labs/flux-1-schnell"
+    )
+    # the REST API wraps the output in `result`...
+    aioclient_mock.post(url, json={"result": {"image": b64(b"PIC")}, "success": True})
+    key = f"{ACCOUNT}:tok"
+    flux_1 = "@cf/black-forest-labs/flux-1-schnell"
+    got = await generate_image(session, "cloudflare", key, flux_1, "prompt")
+    assert got == b"PIC"
+    request = aioclient_mock.mock_calls[0]
+    assert (
+        request[2] == {"prompt": "prompt"}
+        and request[3]["Authorization"] == "Bearer tok"
+    )
+    # ...a binding does not
+    aioclient_mock.clear_requests()
+    aioclient_mock.post(url, json={"image": b64(b"PIC2")})
+    assert await generate_image(session, "cloudflare", key, flux_1, "p") == b"PIC2"
+
+
+async def test_cloudflare_flux_2_takes_a_form(hass, aioclient_mock):
+    from homeassistant.helpers.aiohttp_client import async_get_clientsession
+
+    session = async_get_clientsession(hass)
+    url = image_providers.CLOUDFLARE_URL.format(
+        account=ACCOUNT, model="@cf/black-forest-labs/flux-2-dev"
+    )
+    aioclient_mock.post(url, json={"result": {"image": b64(b"PIC")}})
+    # the default model, and one written without its `@`, are understood
+    assert PROVIDERS["cloudflare"].default_model == "@cf/black-forest-labs/flux-2-dev"
+    key = f"{ACCOUNT}:tok"
+    assert await generate_image(session, "cloudflare", key, "", "p") == b"PIC"
+    got = await generate_image(
+        session, "cloudflare", key, "cf/black-forest-labs/flux-2-dev", "p"
+    )
+    assert got == b"PIC"
+    form = aioclient_mock.mock_calls[0][2]
+    assert isinstance(form, image_providers.FormData)
+    names = [field[0]["name"] for field in form._fields]
+    assert names == ["prompt", "width", "height"]
+
+
+async def test_cloudflare_refuses_what_it_cannot_use(hass, aioclient_mock):
+    from homeassistant.helpers.aiohttp_client import async_get_clientsession
+
+    session = async_get_clientsession(hass)
+    for key, model in (
+        ("tok", ""),  # no account id
+        (f"{ACCOUNT}:", ""),  # no token
+        ("../x:tok", ""),  # not an account id: nothing is sent
+        (f"{ACCOUNT}:tok", "gpt-image-1"),  # not a Workers AI model
+    ):
+        with pytest.raises(ProviderError):
+            await generate_image(session, "cloudflare", key, model, "p")
+    assert aioclient_mock.call_count == 0
+    url = image_providers.CLOUDFLARE_URL.format(
+        account=ACCOUNT, model="@cf/black-forest-labs/flux-2-dev"
+    )
+    aioclient_mock.post(
+        url,
+        status=401,
+        json={"success": False, "errors": [{"code": 10000, "message": "Bad token"}]},
+    )
+    with pytest.raises(ProviderError, match="Bad token") as refused:
+        await generate_image(session, "cloudflare", f"{ACCOUNT}:tok", "", "p")
+    assert refused.value.code == "provider_key_refused"
+    aioclient_mock.clear_requests()
+    aioclient_mock.post(url, json={"result": {}, "success": True})
+    with pytest.raises(ProviderError) as empty:
+        await generate_image(session, "cloudflare", f"{ACCOUNT}:tok", "", "p")
+    assert empty.value.code == "provider_no_image"
+
+
+async def test_gemini_asks_for_a_wide_picture(hass, aioclient_mock):
+    from homeassistant.helpers.aiohttp_client import async_get_clientsession
+
+    aioclient_mock.post(GEMINI, json=gemini_reply(b"PIC"))
+    await generate_image(async_get_clientsession(hass), "gemini", "k", "", "p")
+    config = aioclient_mock.mock_calls[0][2]["generationConfig"]
+    assert config["imageConfig"] == {"aspectRatio": "3:2"}
+
+
 # -- photos -----------------------------------------------------------------------
 
 
@@ -253,7 +345,7 @@ def test_the_atlas_of_a_photo():
 async def test_the_status_never_shows_the_key(editor, hass):
     status = (await call(editor, "image_status", section="fish", kind="fish"))["result"]
     assert status["configured"] is False and status["provider"] is None
-    assert [p["id"] for p in status["providers"]] == ["gemini", "openai"]
+    assert [p["id"] for p in status["providers"]] == ["gemini", "openai", "cloudflare"]
     assert status["keys"] == ["magenta", "green"]
     assert status["licenses"] == ["CC BY 4.0", "CC0", "public domain"]
     configure(hass)
@@ -294,7 +386,7 @@ async def test_the_prompt_is_the_fixed_one(editor):
             key="green",
         )
     )["result"]
-    assert "#00FF00" in green["prompt"] and PROMPT["version"] == 1
+    assert "#00FF00" in green["prompt"] and PROMPT["version"] == 2
     bad = await call(editor, "image_prompt", section="fish", kind="fish", species="x")
     assert "error" in bad
 
@@ -411,6 +503,35 @@ async def test_an_unfit_photo_and_a_real_animation_are_refused(
     assert junk["error"]["code"] == "unreadable"
 
 
+async def test_the_animation_of_a_built_atlas_can_be_played(
+    editor, hass, aioclient_mock
+):
+    configure(hass)
+    aioclient_mock.post(GEMINI, json=gemini_reply(photo_bytes()))
+    photo = (
+        await call(editor, "image_generate", section="fish", kind="fish", species="X y")
+    )["result"]
+    atlas = (await call(editor, "image_build", **NEW, photo=photo["token"]))["result"]
+    view = (await call(editor, "atlas_view", atlas=atlas["token"], **NEW))["result"]
+    # the sheet itself travels, with the layout of its frames and clips
+    assert view["image"].startswith("data:image/webp;base64,")
+    assert view["frame"] == atlas["frame"] and view["columns"] == 8
+    assert view["clips"]["swim"] == {"from": 0, "to": 42, "fps": 24, "loop": True}
+    assert view["clips"]["turn"]["loop"] is False and view["facing"] == "right"
+    # an unknown token, another entry's atlas, and an entry without animation
+    lost = await call(editor, "atlas_view", atlas="nope", **NEW)
+    assert lost["error"]["code"] == "unknown_atlas"
+    other = {"section": "fish", "kind": "fish", "entry_id": "other_species"}
+    wrong = await call(editor, "atlas_view", atlas=atlas["token"], **other)
+    assert wrong["error"]["code"] == "atlas_mismatch"
+    none = await call(editor, "atlas_view", **other)
+    assert none["error"]["code"] == "no_atlas"
+    coral = await call(
+        editor, "atlas_view", section="corals", kind="coral", entry_id="a"
+    )
+    assert coral["error"]["code"] == "no_atlas"
+
+
 async def test_a_generated_atlas_is_saved_and_proposed(
     editor, hass, aioclient_mock, gh
 ):
@@ -451,6 +572,15 @@ async def test_a_generated_atlas_is_saved_and_proposed(
     }
     assert written["source"]["type"] == "ai-generated" and written["kind"] == "fish"
     assert atlas["token"] not in hass.data[T].atlases
+    # the animation is played from the user's own file, once saved
+    reply = await call(editor, "atlas_view", **NEW)
+    assert "result" in reply, reply
+    view = reply["result"]
+    assert view["url"].endswith(
+        "/fish/amphiprion_percula/amphiprion_percula.webp?v=u1"
+    ) or ("/fish/amphiprion_percula/amphiprion_percula.webp?v=" in view["url"])
+    assert view["degraded"] is True and view["columns"] == 8
+    assert set(view["clips"]) == {"swim", "idle", "turn"}
     # saved again without the atlas: the pictures of the user stay
     again = (
         await call(editor, "save", data={**FISH_DRAFT, "feeding_response": 0.4}, **NEW)

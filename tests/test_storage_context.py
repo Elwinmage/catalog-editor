@@ -124,3 +124,39 @@ def test_locate_visual(tmp_path):
         "/fake_catalog/pack/../../etc/passwd",  # leaves the layer
     ):
         assert context.locate_visual(updater, {"image": url}, "image") is None
+
+
+def test_read_atlas_needs_a_complete_descriptor_and_a_local_atlas_file(tmp_path):
+    """A descriptor without a usable atlas gives no animation (nothing is guessed)."""
+    from custom_components.catalog_editor.catalog_pack import Layer
+
+    layer = Layer("user", tmp_path, "/local", "s1")
+
+    class Source:
+        def layers(self):
+            return [layer]
+
+    source = Source()
+    base = {"atlas": {"1x": "atlas.webp"}, "frame": [8, 8], "columns": 2, "clips": {}}
+
+    def put(data, *, sheet=True):
+        folder = tmp_path / "items" / "e"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "item.json").write_text(json.dumps(data), encoding="utf-8")
+        (folder / "atlas.webp").unlink(missing_ok=True)
+        if sheet:
+            (folder / "atlas.webp").write_bytes(b"IMG")
+
+    assert context.read_atlas(source, "item", "missing") is None
+    put(base)
+    found = context.read_atlas(source, "item", "e")
+    assert found is not None
+    info, url = found
+    assert info["columns"] == 2 and url == "/local/items/e/atlas.webp?v=s1"
+    # each way the descriptor can be unusable
+    put(base, sheet=False)  # the sheet is not there
+    assert context.read_atlas(source, "item", "e") is None
+    put({**base, "atlas": {"1x": "../atlas.webp"}})  # not a file of the entry
+    assert context.read_atlas(source, "item", "e") is None
+    put({k: v for k, v in base.items() if k != "clips"})  # no clips to play
+    assert context.read_atlas(source, "item", "e") is None

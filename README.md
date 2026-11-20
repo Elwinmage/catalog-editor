@@ -15,6 +15,12 @@ reading the catalog** (`<config>/reeftech_catalog/user/<section>/`): it is
 usable at once, without waiting for a release. Contributing it to the catalog
 itself (a pull request) comes on top of that.
 
+## User guide
+
+A step-by-step guide with screenshots (install, download a catalog, find and edit an entry, the three levels of rendering of a fish, photo and animation, propose to the catalog, follow your pull requests):
+
+[<img src="https://flagicons.lipis.dev/flags/4x3/gb.svg" width="5%" alt="English" title="English"/>](docs/guide/guide.en.md) [<img src="https://flagicons.lipis.dev/flags/4x3/fr.svg" width="5%" alt="Français" title="Français"/>](docs/guide/guide.fr.md) [<img src="https://flagicons.lipis.dev/flags/4x3/de.svg" width="5%" alt="Deutsch" title="Deutsch"/>](docs/guide/guide.de.md) [<img src="https://flagicons.lipis.dev/flags/4x3/es.svg" width="5%" alt="Español" title="Español"/>](docs/guide/guide.es.md) [<img src="https://flagicons.lipis.dev/flags/4x3/it.svg" width="5%" alt="Italiano" title="Italiano"/>](docs/guide/guide.it.md) [<img src="https://flagicons.lipis.dev/flags/4x3/nl.svg" width="5%" alt="Nederlands" title="Nederlands"/>](docs/guide/guide.nl.md) [<img src="https://flagicons.lipis.dev/flags/4x3/pl.svg" width="5%" alt="Polski" title="Polski"/>](docs/guide/guide.pl.md) [<img src="https://flagicons.lipis.dev/flags/4x3/pt.svg" width="5%" alt="Português" title="Português"/>](docs/guide/guide.pt.md)
+
 ## Install
 
 1. Install the integration (HACS custom repository, or copy
@@ -92,8 +98,11 @@ storage (`.storage/catalog_editor`).
   (`source`: `ai-generated` and the model, or `photo`, author, license), and
   the pull request holds the atlas and its thumbnail, **never the photo**. A
   species with a real animation made from videos is not replaced unless you say
-  so.
-  Choose the provider (Google Gemini or OpenAI; another is a function in
+  so. *Play the animation* opens a panel beside the form that loops one sequence:
+  `stay`, `swim`, `turn`, then `turn` again drawn mirrored (so the fish faces the
+  way it started), and over again. It plays the animation the entry has, or the
+  one just built, on a water, dark or light background.
+  Choose the provider (Google Gemini, OpenAI or Cloudflare Workers AI, whose key is written `<account id>:<API token>` and which has a free daily allowance; another is a function in
   `image_providers.py`), the key and, if you want, a model in the **options** of
   the integration. The key stays in the config entry and is never sent back to
   the card.

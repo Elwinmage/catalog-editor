@@ -19,7 +19,7 @@
         "data": {
           "sections": "Catalogs to subscribe to",
           "image_provider": "Image provider",
-          "image_key": "API key of the provider",
+          "image_key": "API key of the provider (Cloudflare: <account id>:<API token>)",
           "image_model": "Model (empty: the provider's default)",
           "clear_image_key": "Remove the stored API key"
         }

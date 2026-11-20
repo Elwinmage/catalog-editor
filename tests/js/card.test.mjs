@@ -59,8 +59,9 @@ const FORM = {
   ],
 };
 
-function setup({ language = "en", providers = true, house = false, reeftank = false } = {}) {
-  const dom = new JSDOM("<!doctype html><body></body>", { runScripts: "outside-only", pretendToBeVisual: true });
+function setup({ language = "en", providers = true, house = false, reeftank = false, storage = false } = {}) {
+  // an address gives the page a session storage (without one it throws, and the card copes)
+  const dom = new JSDOM("<!doctype html><body></body>", { runScripts: "outside-only", pretendToBeVisual: true, ...(storage ? { url: "http://localhost/" } : {}) });
   const { window } = dom;
   window.eval(CODE);
   window.confirm = () => true;
@@ -126,6 +127,9 @@ function setup({ language = "en", providers = true, house = false, reeftank = fa
         case "image_generate":
           if (state.generateError) throw state.generateError;
           return state.photoReply || { token: "ph1", width: 640, height: 400, problems: [], key: "magenta", source: { type: "ai-generated", model: "gemini-x" }, preview: "data:image/webp;base64,BBBB" };
+        case "atlas_view":
+          calls.push({ command: "atlas_view_reply" });
+          return state.atlasView || { frame: [208, 100], columns: 8, facing: "right", degraded: true, image: "data:image/webp;base64,SSSS", clips: { swim: { from: 0, to: 42, fps: 24, loop: true }, idle: { from: 43, to: 87, fps: 12, loop: true }, turn: { from: 88, to: 113, fps: 24, loop: false } } };
         case "image_build":
           if (state.buildError) throw state.buildError;
           return { token: "at1", preview: "data:image/webp;base64,CCCC", frame: [208, 120], source: { type: "ai-generated" } };
@@ -207,7 +211,7 @@ function setup({ language = "en", providers = true, house = false, reeftank = fa
   window.document.body.append(card);
   card.setConfig({});
   card.hass = hass;
-  return { window, card, calls, state, root: card.shadowRoot, entries };
+  return { window, card, calls, state, hass, root: card.shadowRoot, entries };
 }
 
 const until = async (check, ms = 3000) => {
@@ -955,6 +959,33 @@ test("a catalog without water types has no such filter", async () => {
   assert.doesNotMatch(text(root), /All waters/);
 });
 
+test("a card built again goes back to the entry being edited", async () => {
+  const { window, hass, root } = setup({ storage: true });
+  await until(() => root.querySelectorAll(".entry").length);
+  root.querySelectorAll(".entry")[0].click();
+  await until(() => root.querySelector("h3")?.textContent === FORM.title);
+  const power = await until(() => field(root, "power w"));
+  type(window, power.querySelector("input"), "12.5");
+  await sleep(50);
+  // Home Assistant builds the card again: same page, a new element
+  window.document.body.replaceChildren();
+  const again = window.document.createElement("catalog-editor-card");
+  window.document.body.append(again);
+  again.setConfig({});
+  again.hass = hass;
+  const view = again.shadowRoot;
+  await until(() => view.querySelector("h3")?.textContent === FORM.title);
+  const back = await until(() => field(view, "power w"));
+  assert.equal(back.querySelector("input").value, "12.5");
+}, 10000);
+
+test("without a remembered view the first catalog is shown", async () => {
+  const { root } = setup({ storage: true });
+  await until(() => root.querySelectorAll(".entry").length);
+  assert.equal(root.querySelector("select.catalog-select").value, "equipment");
+  assert.equal(field(root, "power w"), undefined);
+});
+
 const FISH_FORM = {
   kind: "fish",
   section: "fish",
@@ -998,6 +1029,72 @@ test("a photo is generated, checked and turned into an animation attached to the
   // the animation goes with the draft
   await until(() => last(calls, "validate")?.atlas === "at1");
   state.saveResult = { saved: true };
+});
+
+test("the animation opens beside the form, plays the clips in one loop and follows a new atlas", async () => {
+  const { root, calls, window } = await openNewFish();
+  window.HTMLCanvasElement.prototype.getContext = () => null; // jsdom draws nothing
+  // nothing to play before there is an animation
+  assert.equal(button(root, "Play the animation"), undefined);
+  await until(() => button(root, "Generate the photo (gemini-x)"));
+  button(root, "Generate the photo (gemini-x)").click();
+  await until(() => root.querySelector(".photo-preview"));
+  button(root, "Build the animation").click();
+  await until(() => root.querySelector(".atlas-preview"));
+  button(root, "Play the animation").click();
+  await until(() => root.querySelectorAll(".preview canvas").length === 1);
+  // asked for the atlas that was just built, and the form is still there
+  assert.equal(last(calls, "atlas_view").atlas, "at1");
+  assert.ok(root.querySelector(".split > .main .atlas"));
+  assert.equal(root.querySelector(".preview canvas").width, 208);
+  assert.match(text(root), /Degraded animation/);
+  // the background is a choice that does not rebuild the panel
+  const background = root.querySelector(".preview-bg");
+  background.value = "dark";
+  background.dispatchEvent(new window.Event("change"));
+  assert.ok(root.querySelector(".preview.bg-dark"));
+  // each background has a style rule that reaches the canvas (the rule once looked for a
+  // descendant of the panel instead of the panel itself, so the choice changed nothing)
+  const css = root.querySelector("style").textContent;
+  for (const name of ["water", "dark", "light"]) {
+    const rule = css.match(new RegExp(`(\\.preview[^{]*\\.bg-${name}[^{]*)\\{`));
+    assert.ok(rule, `a rule for ${name}`);
+    background.value = name;
+    background.dispatchEvent(new window.Event("change"));
+    assert.ok(root.querySelector(rule[1].trim()), `the rule of ${name} matches the canvas`);
+  }
+  // a new atlas is played at once
+  const before = calls.filter((c) => c.command === "atlas_view").length;
+  button(root, "Build the animation").click();
+  await until(() => calls.filter((c) => c.command === "atlas_view").length === before + 1);
+  button(root, "Close").click();
+  assert.equal(root.querySelector(".preview"), null);
+});
+
+test("the preview chains stay, swim, turn, turn mirrored, then starts again", async () => {
+  const { window } = setup();
+  const Card = window.customElements.get("catalog-editor-card");
+  const clips = {
+    idle: { from: 43, to: 87, fps: 12, loop: true },
+    swim: { from: 0, to: 42, fps: 24, loop: true },
+    turn: { from: 88, to: 113, fps: 24, loop: false },
+  };
+  const list = Card.playlist(clips);
+  assert.deepEqual(JSON.parse(JSON.stringify(list.map((step) => [step.name, step.flip]))), [["idle", false], ["swim", false], ["turn", false], ["turn", true]]);
+  // a missing clip is skipped
+  assert.equal(Card.playlist({ swim: clips.swim }).map((step) => step.name).join(), "swim");
+  const at = (ms) => JSON.parse(JSON.stringify(Card.sequenceFrame(list, ms))); // plain objects: the card lives in another realm
+  assert.deepEqual(at(0), { name: "idle", flip: false, index: 43 });
+  assert.equal(at(1000 / 12 * 2 + 1).index, 45);
+  // idle lasts 45 / 12 s, then swim begins
+  assert.deepEqual(at(3750 + 1), { name: "swim", flip: false, index: 0 });
+  assert.equal(at(3750 + 1800 + 1).name, "turn"); // 43 / 24 s of swimming
+  assert.equal(at(3750 + 1800 + 1).flip, false);
+  const secondTurn = 3750 + 1800 + 26 / 24 * 1000 + 1;
+  assert.deepEqual(at(secondTurn), { name: "turn", flip: true, index: 88 });
+  // after the second turn the loop starts again with stay
+  const round = 3750 + 1800 + 2 * 26 / 24 * 1000;
+  assert.deepEqual(at(round + 1), { name: "idle", flip: false, index: 43 });
 });
 
 test("the prompt is shown to be used with any tool", async () => {

@@ -11,17 +11,24 @@ from __future__ import annotations
 
 import base64
 import binascii
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
-from aiohttp import ClientError, ClientSession, ClientTimeout
+from aiohttp import ClientError, ClientSession, ClientTimeout, FormData
 
 TIMEOUT = ClientTimeout(total=180)
 GEMINI_URL = (
     "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 )
 OPENAI_URL = "https://api.openai.com/v1/images/generations"
+CLOUDFLARE_URL = (
+    "https://api.cloudflare.com/client/v4/accounts/{account}/ai/run/{model}"
+)
+#: A Cloudflare account id, and the name of one of its models (`@cf/<author>/<name>`)
+_ACCOUNT_RE = re.compile(r"^[0-9a-f]{32}$")
+_CF_MODEL_RE = re.compile(r"^@cf/[a-z0-9._-]+/[a-z0-9._-]+$")
 
 
 class ProviderError(Exception):
@@ -41,13 +48,19 @@ def _code(status: int) -> str:
 
 
 async def _post(
-    session: ClientSession, url: str, headers: dict[str, str], body: dict[str, Any]
+    session: ClientSession,
+    url: str,
+    headers: dict[str, str],
+    body: dict[str, Any] | FormData,
 ) -> dict[str, Any]:
-    """The JSON reply of a POST; errors become ProviderError."""
+    """The JSON reply of a POST (JSON, or a form for `FormData`); errors become ProviderError."""
     try:
-        async with session.post(
-            url, headers=headers, json=body, timeout=TIMEOUT
-        ) as response:
+        # Explicit arguments (not **kwargs) so that the call is type-checked.
+        if isinstance(body, FormData):
+            request = session.post(url, headers=headers, timeout=TIMEOUT, data=body)
+        else:
+            request = session.post(url, headers=headers, timeout=TIMEOUT, json=body)
+        async with request as response:
             status = response.status
             try:
                 payload: Any = await response.json(content_type=None)
@@ -58,6 +71,9 @@ async def _post(
             "provider_unreachable", "The image service cannot be reached"
         ) from err
     error = payload.get("error") if isinstance(payload, dict) else None
+    if error is None and isinstance(payload, dict):
+        errors = payload.get("errors")  # Cloudflare: a list of {code, message}
+        error = errors[0] if isinstance(errors, list) and errors else None
     if status >= 400:
         detail = error.get("message") if isinstance(error, dict) else None
         raise ProviderError(_code(status), str(detail or f"HTTP {status}"))
@@ -84,7 +100,10 @@ async def gemini(session: ClientSession, key: str, model: str, prompt: str) -> b
         {"x-goog-api-key": key},
         {
             "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]},
+            "generationConfig": {
+                "responseModalities": ["TEXT", "IMAGE"],
+                "imageConfig": {"aspectRatio": "3:2"},  # a fish is longer than high
+            },
         },
     )
     for candidate in payload.get("candidates") or []:
@@ -113,6 +132,41 @@ async def openai(session: ClientSession, key: str, model: str, prompt: str) -> b
     return _decode(items[0]["b64_json"])
 
 
+async def cloudflare(
+    session: ClientSession, key: str, model: str, prompt: str
+) -> bytes:
+    """Cloudflare Workers AI (FLUX): the key is `<account id>:<API token>`."""
+    account, _, token = key.partition(":")
+    if not _ACCOUNT_RE.match(account.strip()) or not token.strip():
+        raise ProviderError(
+            "provider_key_refused",
+            "The Cloudflare key is written <account id>:<API token>",
+        )
+    model = model.strip()
+    if model.startswith("cf/"):  # the `@` is easily lost when typing
+        model = f"@{model}"
+    if not _CF_MODEL_RE.match(model):
+        raise ProviderError("provider_refused", f"Not a Workers AI model: {model}")
+    body: dict[str, Any] | FormData = {"prompt": prompt}
+    if "/flux-2" in model:  # these take a form, not JSON; a fish is wider than high
+        body = FormData()
+        body.add_field("prompt", prompt)
+        body.add_field("width", "1536")
+        body.add_field("height", "1024")
+    payload = await _post(
+        session,
+        CLOUDFLARE_URL.format(account=account.strip(), model=model),
+        {"Authorization": f"Bearer {token.strip()}"},
+        body,
+    )
+    # The REST API wraps the output in `result`; the Workers binding does not
+    result = payload.get("result")
+    output = result if isinstance(result, dict) else payload
+    if not output.get("image"):
+        raise ProviderError("provider_no_image", "The image service sent no picture")
+    return _decode(output["image"])
+
+
 @dataclass(frozen=True)
 class Provider:
     """An image model service."""
@@ -126,6 +180,12 @@ class Provider:
 PROVIDERS: dict[str, Provider] = {
     "gemini": Provider("gemini", "Google Gemini", "gemini-2.5-flash-image", gemini),
     "openai": Provider("openai", "OpenAI", "gpt-image-1", openai),
+    "cloudflare": Provider(
+        "cloudflare",
+        "Cloudflare Workers AI",
+        "@cf/black-forest-labs/flux-2-dev",
+        cloudflare,
+    ),
 }
 
 
