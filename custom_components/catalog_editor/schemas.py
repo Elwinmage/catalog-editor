@@ -18,8 +18,9 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from jsonschema import Draft202012Validator
 
-from .catalog_pack import PackClient, PackEntry, PackError, extract_entry
+from .catalog_pack import PackEntry, PackError, extract_entry
 from .const import DOMAIN, SECTION_KINDS
+from .reeftank_pack import pack_client
 from .rules import load_validators
 
 _LOGGER = logging.getLogger(__name__)
@@ -116,7 +117,7 @@ class SchemaStore:
         Returns True when the section has usable schemas afterwards. A failure
         (offline, release without schemas) keeps what is installed.
         """
-        client = PackClient(async_get_clientsession(self.hass), section)
+        client = pack_client(async_get_clientsession(self.hass), section)
         try:
             manifest = await client.latest()
             entry = manifest.schema

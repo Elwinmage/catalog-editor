@@ -8,7 +8,7 @@ from typing import Any
 
 from .catalogs import EXTERNAL_KINDS
 from .github import GithubClient, GithubError, PullRequest
-from .rules import ASSET_FILES, DESCRIPTORS, FOLDERS
+from .rules import DESCRIPTORS, FOLDERS, asset_files
 from .storage import dump
 
 LICENCE = (
@@ -45,7 +45,7 @@ def stale_files(
     return {
         f"{folder}/{name}": None
         for name in present
-        if name in ASSET_FILES and name not in visuals
+        if name in asset_files(kind) and name not in visuals
     }
 
 

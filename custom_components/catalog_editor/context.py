@@ -13,11 +13,11 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Protocol
 
-from . import house_catalog_rules as house
 from .catalog_pack import KIND_LAYOUT, Layer
 from .catalog_rules import Context, brand_key
 from .catalogs import EXTERNAL_SECTIONS
 from .const import VIEW_GROUPS, VIEW_KEYS
+from .rules import rules_of
 
 
 def strip_entry(
@@ -72,17 +72,22 @@ def _group(
     }
 
 
-def house_context(
+def external_context(
     view: dict[str, Any], section: str, exclude: tuple[str, str] | None = None
-) -> house.Context:
-    """What a draft of the house catalog is checked against: the others of its section.
+) -> Any:
+    """What a draft of a declared catalog (house, reeftank) is checked against.
 
-    The context of the house rules has one group per section, named after it.
+    The others of its section: the context of those rules has one group per
+    section, named after it.
     """
     entries: dict[str, dict[str, Any]] = {}
     for kind in EXTERNAL_SECTIONS[section]:
         entries |= _group(view, kind, exclude)
-    return house.Context(**{section: entries})
+    kind = next(iter(EXTERNAL_SECTIONS[section]))
+    return rules_of(kind).Context(**{section: entries})
+
+
+house_context = external_context
 
 
 def build_context(
@@ -151,7 +156,7 @@ def entry_label(kind: str, entry_id: str, data: dict[str, Any]) -> str:
         return str(data.get("fullname") or entry_id)
     if kind == "water_test":
         return f"{data.get('brand', '')} {data.get('name', '')}".strip() or entry_id
-    name = data.get("name")
+    name = data.get("name") or data.get("names")
     if isinstance(name, dict) and name.get("en"):
         return str(name["en"])
     if kind == "item":

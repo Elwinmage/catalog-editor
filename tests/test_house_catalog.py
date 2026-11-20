@@ -20,6 +20,7 @@ from custom_components.catalog_editor import (
     hints,
     house_catalog_rules,
     house_catalog_sections,
+    reeftank_catalog_sections,
     rules,
 )
 from custom_components.catalog_editor.context import house_context
@@ -101,12 +102,25 @@ async def save(client, at: dict, data: dict, hass_client=None) -> None:
 
 def test_the_house_sections_are_declared_to_the_client():
     """The client knows no house: the editor declares what house-catalog describes."""
-    assert catalogs.EXTERNAL_SECTIONS == house_catalog_sections.SECTIONS
-    assert catalogs.EXTERNAL_KINDS == ("tree", "object")
-    assert (
-        dict.fromkeys(("trees", "objects"), "Elwinmage/house-catalog")
-        == catalog_pack.SECTION_REPOS
+    assert catalogs.EXTERNAL_SECTIONS == {
+        **house_catalog_sections.SECTIONS,
+        **reeftank_catalog_sections.SECTIONS,
+    }
+    assert catalogs.EXTERNAL_KINDS == (
+        "tree",
+        "object",
+        "fish",
+        "coral",
+        "plant",
+        "invertebrate",
     )
+    assert {
+        **dict.fromkeys(("trees", "objects"), "Elwinmage/house-catalog"),
+        **dict.fromkeys(
+            ("fish", "corals", "plants", "invertebrates"),
+            "Elwinmage/reeftank-catalog",
+        ),
+    } == catalog_pack.SECTION_REPOS
     assert catalog_pack.repo_of("trees") == house_catalog_sections.REPO
     assert catalog_pack.repo_of("equipment") == catalog_pack.REPO
     assert catalog_pack.SECTION_KINDS["objects"] == frozenset({"object"})
@@ -123,7 +137,7 @@ def test_the_house_sections_are_declared_to_the_client():
     assert const.VIEW_GROUPS["tree"] == const.VIEW_GROUPS["object"] == "items"
     assert hints.ID_FROM["tree"] == hints.ID_FROM["object"] == ("name.en",)
     assert hints.HAS_VISUAL["tree"] is True and hints.HAS_VISUAL["task"] is False
-    assert KIND_ORDER[-2:] == ("tree", "object") and KIND_ORDER[0] == "task"
+    assert KIND_ORDER[-6:-4] == ("tree", "object") and KIND_ORDER[0] == "task"
 
 
 def test_each_kind_has_the_rules_of_its_catalog():

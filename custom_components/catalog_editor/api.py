@@ -25,13 +25,23 @@ from homeassistant.helpers.http import HomeAssistantView
 
 from .catalog_pack import repo_of
 from .catalog_runtime import SIGNAL_USER_CATALOG_CHANGED
+from .catalogs import EXTERNAL_KINDS
 from .compat import vol
-from .const import DOMAIN, MAX_UPLOADS, SECTION_KINDS, UPLOAD_TTL_S, VIEW_GROUPS
+from .const import (
+    CONF_IMAGE_KEY,
+    CONF_IMAGE_MODEL,
+    CONF_IMAGE_PROVIDER,
+    DOMAIN,
+    MAX_UPLOADS,
+    SECTION_KINDS,
+    UPLOAD_TTL_S,
+    VIEW_GROUPS,
+)
 from .context import (
     build_context,
     count_brands,
     entry_label,
-    house_context,
+    external_context,
     list_entries,
     locate_visual,
     preferred_spellings,
@@ -47,9 +57,23 @@ from .github import (
     poll_login,
     start_login,
 )
-from .hints import HAS_VISUAL
-from .images import MAX_UPLOAD_BYTES, ImageError, Visual, process_image
-from .rules import DESCRIPTORS, HOUSE_KINDS, KNOWN_LANGS, Report, validate_draft
+from .hints import ATLAS_KINDS, HAS_VISUAL, SPECIES_KINDS
+from .image_providers import PROVIDERS, ProviderError, generate_image
+from .images import (
+    MAX_PHOTO_BYTES,
+    MAX_UPLOAD_BYTES,
+    ImageError,
+    Photo,
+    Visual,
+    atlas_preview,
+    build_degraded,
+    inspect_photo,
+    photo_preview,
+    process_image,
+)
+from .reeftank_catalog_still import KEYS as BACKGROUND_KEYS
+from .reeftank_catalog_still import is_real_animation, render_prompt
+from .rules import ALL_LANGS, DESCRIPTORS, Report, complete, validate_draft
 from .schemas import SchemaStore
 from .source import SectionSource
 from .storage import UserCatalog, dump
@@ -66,6 +90,7 @@ _DRAFT = {
     vol.Required("data"): dict,
     vol.Optional("visual"): str,  # token of an uploaded picture
     vol.Optional("remove_visual", default=False): bool,
+    vol.Optional("atlas"): str,  # token of a degraded atlas built from a photo
 }
 
 
@@ -84,13 +109,21 @@ class EditorData:
     uploads: dict[str, tuple[Visual, float]] = field(default_factory=dict)
     #: The merged catalog of each section (shared pack + user layer)
     sources: dict[str, SectionSource] = field(default_factory=dict)
+    #: Image model of the contributor: provider, API key, model (options of the entry)
+    image: dict[str, str] = field(default_factory=dict)
+    #: token -> (photo, expiry): the photos waiting to become an atlas
+    photos: dict[str, tuple[Photo, float]] = field(default_factory=dict)
+    #: token -> (atlas, expiry): the atlases built, until the entry is saved
+    atlases: dict[str, tuple[PendingAtlas, float]] = field(default_factory=dict)
 
     def prune(self) -> None:
         """Forget expired uploads, then the oldest ones above the limit."""
-        now = time.monotonic()
-        self.uploads = {k: v for k, v in self.uploads.items() if v[1] > now}
-        while len(self.uploads) > MAX_UPLOADS:
-            del self.uploads[min(self.uploads, key=lambda k: self.uploads[k][1])]
+        for store in (self.uploads, self.photos, self.atlases):
+            now = time.monotonic()
+            for token in [k for k, v in store.items() if v[1] <= now]:
+                del store[token]
+            while len(store) > MAX_UPLOADS:
+                del store[min(store, key=lambda k: store[k][1])]
 
     def store(self, visual: Visual) -> str:
         """Keep an uploaded picture until the entry is saved."""
@@ -99,6 +132,25 @@ class EditorData:
         self.uploads[token] = (visual, time.monotonic() + UPLOAD_TTL_S)
         self.prune()
         return token
+
+    def keep(self, store: dict[str, Any], item: Any) -> str:
+        """Keep a photo or an atlas (`photos`, `atlases`) until it is used."""
+        self.prune()
+        token = secrets.token_urlsafe(16)
+        store[token] = (item, time.monotonic() + UPLOAD_TTL_S)
+        self.prune()
+        return token
+
+
+@dataclass(frozen=True)
+class PendingAtlas:
+    """A degraded atlas built for an entry, to attach when it is saved."""
+
+    section: str
+    kind: str
+    entry_id: str
+    files: dict[str, bytes]
+    keys: dict[str, Any]
 
 
 def _data(hass: HomeAssistant) -> EditorData | None:
@@ -175,6 +227,32 @@ def _command(schema: dict[Any, Any], name: str):
 # -- drafts -----------------------------------------------------------------------
 
 
+def _atlas(target: _Target, msg: dict[str, Any]) -> PendingAtlas | None:
+    """The atlas built for this entry (None when the draft has none)."""
+    token = msg.get("atlas")
+    if token is None:
+        return None
+    target.data.prune()
+    if token not in target.data.atlases:
+        raise _Refused("unknown_atlas", "The atlas expired: build it again")
+    atlas = target.data.atlases[token][0]
+    if (atlas.section, atlas.kind, atlas.entry_id) != (
+        target.section,
+        target.kind,
+        msg["entry_id"],
+    ):
+        raise _Refused("atlas_mismatch", "This atlas was built for another entry")
+    return atlas
+
+
+def _with_atlas(target: _Target, msg: dict[str, Any]) -> dict[str, Any]:
+    """The draft with the descriptor keys of its atlas (the pictures it comes with)."""
+    atlas = _atlas(target, msg)
+    if atlas is None:
+        return msg
+    return {**msg, "data": {**msg["data"], **atlas.keys}}
+
+
 async def _visuals(
     hass: HomeAssistant, target: _Target, msg: dict[str, Any]
 ) -> dict[str, bytes]:
@@ -183,6 +261,17 @@ async def _visuals(
     A new upload; else the ones of the user's own entry; else the ones of the
     entry of the catalog being overridden (so that overriding keeps its visual).
     """
+    if target.kind in SPECIES_KINDS:
+        atlas = _atlas(target, msg)
+        if atlas is not None:
+            return dict(atlas.files)
+        # a species only ships the pictures the user made (never the catalog's)
+        return await hass.async_add_executor_job(
+            target.data.catalog.read_visuals,
+            target.section,
+            target.kind,
+            msg["entry_id"],
+        )
     if not HAS_VISUAL[target.kind] or msg["remove_visual"]:
         return {}
     token = msg.get("visual")
@@ -255,14 +344,16 @@ async def _check(
     hass: HomeAssistant, target: _Target, msg: dict[str, Any]
 ) -> tuple[Report, dict[str, bytes]]:
     """Everything the catalog CI checks about a draft."""
+    msg = _with_atlas(target, msg)
     entry_id, kind = msg["entry_id"], target.kind
     visuals = await _visuals(hass, target, msg)
+    draft = complete(kind, msg["data"])
     files = {name: len(blob) for name, blob in visuals.items()}
     if kind != "task":
-        files[DESCRIPTORS[kind]] = len(dump(msg["data"]))
+        files[DESCRIPTORS[kind]] = len(dump(draft))
     context: Any
-    if kind in HOUSE_KINDS:
-        context = house_context(target.view, target.section, (kind, entry_id))
+    if kind in EXTERNAL_KINDS:
+        context = external_context(target.view, target.section, (kind, entry_id))
     else:
         context = build_context(
             target.view,
@@ -276,7 +367,7 @@ async def _check(
     report = validate_draft(
         kind,
         entry_id,
-        msg["data"],
+        draft,
         files,
         context,
         target.data.schemas.validators_of(kind),
@@ -434,6 +525,7 @@ async def ws_save(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
     entry_id = msg["entry_id"]
     if msg["new"] and entry_id in target.view.get(VIEW_GROUPS[target.kind], {}):
         raise _Refused("id_taken", f"{target.kind} {entry_id!r} already exists")
+    msg = _with_atlas(target, msg)
     report, visuals = await _check(hass, target, msg)
     if report.errors:
         return {"saved": False, **_report(report)}
@@ -442,10 +534,11 @@ async def ws_save(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
         target.section,
         target.kind,
         entry_id,
-        msg["data"],
+        complete(target.kind, msg["data"]),
         visuals,
     )
     target.data.uploads.pop(msg.get("visual", ""), None)
+    target.data.atlases.pop(msg.get("atlas", ""), None)
     await _user_changed(hass, target.source)
     return {"saved": True, "id": entry_id, **_report(report)}
 
@@ -461,6 +554,175 @@ async def ws_delete(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, bool]
         raise _Refused("not_found", f"No entry of yours: {target.kind} {msg['id']!r}")
     await _user_changed(hass, target.source)
     return {"deleted": True}
+
+
+# -- photos and atlases of the species -------------------------------------------------
+
+MAX_SPECIES = 200
+_IMAGE_TARGET = {
+    vol.Required("section"): vol.In(list(SECTION_KINDS)),
+    vol.Required("kind"): vol.In(list(ATLAS_KINDS)),
+}
+_KEY = vol.In(list(BACKGROUND_KEYS))
+
+
+def _settings(data: EditorData) -> tuple[str, str, str] | None:
+    """Provider, API key and model of the contributor; None until set."""
+    provider = data.image.get(CONF_IMAGE_PROVIDER)
+    key = data.image.get(CONF_IMAGE_KEY)
+    if provider not in PROVIDERS or not key:
+        return None
+    return provider, key, data.image.get(CONF_IMAGE_MODEL) or ""
+
+
+async def _photo_reply(
+    hass: HomeAssistant, data: EditorData, photo: Photo
+) -> dict[str, Any]:
+    """What the card needs to show a photo and to ask for its atlas."""
+    preview = await hass.async_add_executor_job(photo_preview, photo.blob)
+    return {
+        "token": data.keep(data.photos, photo),
+        "width": photo.size[0],
+        "height": photo.size[1],
+        "problems": list(photo.problems),
+        "key": photo.key,
+        "source": photo.source,
+        "preview": preview,
+    }
+
+
+@_command(_IMAGE_TARGET, "image_status")
+async def ws_image_status(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
+    """What the card needs to offer the generation of a photo (never the key)."""
+    target = await _target(hass, msg)
+    settings = _settings(target.data)
+    source = target.data.schemas.schemas[target.section]["common"]["$defs"]["source"]
+    return {
+        "configured": settings is not None,
+        "provider": settings[0] if settings else None,
+        "model": (
+            settings[2] or PROVIDERS[settings[0]].default_model if settings else None
+        ),
+        "providers": [{"id": p.id, "name": p.name} for p in PROVIDERS.values()],
+        "keys": list(BACKGROUND_KEYS),
+        "licenses": source["properties"]["license"]["enum"],
+    }
+
+
+@_command(
+    {
+        **_IMAGE_TARGET,
+        vol.Required("species"): vol.All(str, vol.Length(min=2, max=MAX_SPECIES)),
+        vol.Optional("key", default="magenta"): _KEY,
+    },
+    "image_prompt",
+)
+async def ws_image_prompt(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, str]:
+    """The fixed prompt for a species, to use with any image tool by hand."""
+    return {"prompt": render_prompt(msg["species"].strip(), msg["key"])}
+
+
+@_command(
+    {
+        **_IMAGE_TARGET,
+        vol.Required("species"): vol.All(str, vol.Length(min=2, max=MAX_SPECIES)),
+        vol.Optional("key", default="magenta"): _KEY,
+    },
+    "image_generate",
+)
+async def ws_image_generate(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
+    """Ask the contributor's image model for the photo of a species."""
+    data = _editor(hass)
+    settings = _settings(data)
+    if settings is None:
+        raise _Refused(
+            "image_not_configured", "Set an image provider and its API key first"
+        )
+    provider, api_key, model = settings
+    name = model or PROVIDERS[provider].default_model
+    try:
+        blob = await generate_image(
+            async_get_clientsession(hass),
+            provider,
+            api_key,
+            model,
+            render_prompt(msg["species"].strip(), msg["key"]),
+        )
+        photo = await hass.async_add_executor_job(
+            inspect_photo, blob, {"type": "ai-generated", "model": name}, msg["key"]
+        )
+    except ProviderError as err:
+        raise _Refused(err.code, str(err)) from err
+    except ImageError as err:
+        raise _Refused(str(err), f"The generated picture is refused: {err}") from err
+    return await _photo_reply(hass, data, photo)
+
+
+def _entry_id_ok(target: _Target, entry_id: str) -> bool:
+    pattern = target.data.schemas.schemas[target.section]["common"]["$defs"]["id"]
+    return (
+        re.fullmatch(pattern["pattern"], entry_id) is not None
+        and len(entry_id) <= pattern["maxLength"]
+    )
+
+
+@_command(
+    {
+        **_IMAGE_TARGET,
+        vol.Required("entry_id"): str,
+        vol.Required("photo"): str,
+        vol.Optional("key"): _KEY,
+        vol.Optional("author"): str,
+        vol.Optional("license"): str,
+        vol.Optional("force", default=False): bool,
+    },
+    "image_build",
+)
+async def ws_image_build(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
+    """Build the degraded atlas of an entry from a photo (kept until it is saved)."""
+    target = await _target(hass, msg)
+    data, entry_id = target.data, msg["entry_id"]
+    data.prune()
+    if msg["photo"] not in data.photos:
+        raise _Refused("unknown_photo", "The photo expired: send it again")
+    photo = data.photos[msg["photo"]][0]
+    if not _entry_id_ok(target, entry_id):
+        raise _Refused("invalid_id", f"{entry_id!r} is not a valid id for the files")
+    if photo.problems and not msg["force"]:
+        raise _Refused("photo_unfit", "; ".join(photo.problems))
+    current = await hass.async_add_executor_job(
+        read_descriptor, target.source, target.kind, entry_id
+    )
+    if is_real_animation(current) and not msg["force"]:
+        raise _Refused(
+            "real_animation", "This species already has an animation made from videos"
+        )
+    source = {"type": photo.source["type"]}
+    if "model" in photo.source:
+        source["model"] = photo.source["model"]
+    else:
+        for field_name in ("author", "license"):
+            if not msg.get(field_name):
+                raise _Refused(
+                    "source_incomplete", f"A photo needs its {field_name} (source)"
+                )
+            source[field_name] = msg[field_name]
+    source["date"] = datetime.now(UTC).date().isoformat()
+    try:
+        still = await hass.async_add_executor_job(
+            build_degraded, photo, entry_id, source, msg.get("key")
+        )
+    except ImageError as err:
+        raise _Refused(str(err), f"The photo is refused: {err}") from err
+    pending = PendingAtlas(
+        target.section, target.kind, entry_id, still.files, still.keys
+    )
+    return {
+        "token": data.keep(data.atlases, pending),
+        "preview": atlas_preview(still),
+        "frame": still.keys["frame"],
+        "source": source,
+    }
 
 
 # -- GitHub -----------------------------------------------------------------------
@@ -485,8 +747,8 @@ def _client(hass: HomeAssistant, data: EditorData, section: str) -> GithubClient
 @_command(
     {
         vol.Required("text"): vol.All(str, vol.Length(min=1, max=MAX_TEXT)),
-        vol.Required("source"): vol.In(KNOWN_LANGS),
-        vol.Required("targets"): [vol.In(KNOWN_LANGS)],
+        vol.Required("source"): vol.In(ALL_LANGS),
+        vol.Required("targets"): [vol.In(ALL_LANGS)],
     },
     "translate",
 )
@@ -885,6 +1147,39 @@ class ImageUploadView(HomeAssistantView):
         )
 
 
+class PhotoUploadView(HomeAssistantView):
+    """`POST /api/catalog_editor/photo` with a `file` field: the photo of a species."""
+
+    url = f"/api/{DOMAIN}/photo"
+    name = f"api:{DOMAIN}:photo"
+
+    async def post(self, request):
+        """Check a photo and keep it until its atlas is built."""
+        hass: HomeAssistant = request.app["hass"]
+        data = _data(hass)
+        if not request["hass_user"].is_admin:
+            return self.json_message("Administrators only", 403, "unauthorized")
+        if data is None:
+            return self.json_message("The editor is not loaded", 503, "not_loaded")
+        form = await request.post()
+        upload = form.get("file")
+        if not hasattr(upload, "file"):
+            return self.json_message("Field 'file' expected", 400, "invalid_format")
+        blob = upload.file.read(MAX_PHOTO_BYTES + 1)
+        key = form.get("key")
+        try:
+            photo = await hass.async_add_executor_job(
+                inspect_photo,
+                blob,
+                {"type": "photo"},
+                key if key in BACKGROUND_KEYS else None,
+            )
+            reply = await _photo_reply(hass, data, photo)
+        except ImageError as err:
+            return self.json_message(f"Photo refused: {err}", 400, str(err))
+        return self.json(reply)
+
+
 def async_register_api(hass: HomeAssistant) -> None:
     """Register the commands and the upload endpoint (once per run)."""
     if hass.data.get(f"{DOMAIN}_api"):
@@ -910,7 +1205,12 @@ def async_register_api(hass: HomeAssistant) -> None:
         ws_pending,
         ws_contribute_batch,
         ws_contributions,
+        ws_image_status,
+        ws_image_prompt,
+        ws_image_generate,
+        ws_image_build,
     ):
         async_register_command(hass, command)
     if getattr(hass, "http", None) is not None:
         hass.http.register_view(ImageUploadView())
+        hass.http.register_view(PhotoUploadView())

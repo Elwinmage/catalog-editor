@@ -13,7 +13,15 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
 from .api import EditorData, async_register_api
-from .const import CONF_CLIENT_ID, CONF_SECTIONS, DOMAIN, SECTION_KINDS
+from .const import (
+    CONF_CLIENT_ID,
+    CONF_IMAGE_KEY,
+    CONF_IMAGE_MODEL,
+    CONF_IMAGE_PROVIDER,
+    CONF_SECTIONS,
+    DOMAIN,
+    SECTION_KINDS,
+)
 from .contributions import Contributions
 from .frontend import async_register_card, async_register_user_paths
 from .schemas import SchemaStore
@@ -61,6 +69,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         contributions,
         entry.data[CONF_CLIENT_ID],
         sources=await async_start_sources(hass, subscribed),
+        image={
+            name: entry.options[name]
+            for name in (CONF_IMAGE_PROVIDER, CONF_IMAGE_KEY, CONF_IMAGE_MODEL)
+            if entry.options.get(name)
+        },
     )
     await data.schemas.async_load()
     hass.data[DOMAIN] = data

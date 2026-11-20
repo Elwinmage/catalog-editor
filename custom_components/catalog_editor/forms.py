@@ -14,8 +14,8 @@ import unicodedata
 from typing import Any
 
 from .const import SECTION_KINDS
-from .hints import BRAND_FIELD, HAS_VISUAL, ID_FROM, REFS
-from .rules import ASSET_FILES, KNOWN_LANGS
+from .hints import ATLAS_KINDS, BRAND_FIELD, HAS_VISUAL, ID_FROM, REFS, SPECIES_KINDS
+from .rules import ASSET_FILES, KNOWN_LANGS, hidden_keys
 
 _DEF_RE = re.compile(r"#/\$defs/([A-Za-z0-9_]+)$")
 #: Shared definitions that are a widget of their own
@@ -75,8 +75,9 @@ def _field(
     elif shared in _WIDGETS:
         field["type"] = _WIDGETS[shared]
         if shared == "i18n":
-            field["languages"] = list(KNOWN_LANGS)
-            field["required_languages"] = ["en"]
+            # A catalog may list the languages it needs, and require several
+            field["languages"] = list(node.get("properties") or KNOWN_LANGS)
+            field["required_languages"] = list(node.get("required") or ["en"])
     elif shared == "id":
         field["type"] = "id"
     elif shared == "scopes":
@@ -85,6 +86,13 @@ def _field(
     elif "enum" in node:
         field["type"] = "enum"
         field["options"] = list(node["enum"])
+    elif _is_range(node):
+        field["type"] = "range"
+        field["bounds"] = {
+            key: node["items"][key]
+            for key in ("minimum", "maximum")
+            if key in node["items"]
+        }
     elif node.get("type") == "array":
         field.update(_array(node, path, refs, common))
     elif node.get("type") == "object" and "properties" in node:
@@ -96,6 +104,16 @@ def _field(
         # Nothing the card knows how to draw: edited as raw JSON
         field["type"] = "json"
     return field
+
+
+def _is_range(node: dict[str, Any]) -> bool:
+    """A pair of numbers: [smallest, largest]."""
+    items = node.get("items", {})
+    return (
+        node.get("type") == "array"
+        and node.get("minItems") == node.get("maxItems") == 2
+        and items.get("type") == "number"
+    )
 
 
 def _enum_of(node: dict[str, Any], common: dict[str, Any]) -> list[Any]:
@@ -149,7 +167,12 @@ def build_form(kind: str, schemas: dict[str, dict[str, Any]]) -> dict[str, Any]:
     schema = schemas[kind]
     common = schemas.get("common", {})
     section = next(s for s, kinds in SECTION_KINDS.items() if kind in kinds)
-    fields = _fields(schema, "", REFS.get(kind, {}), common)
+    hidden = set(hidden_keys(kind))
+    fields = [
+        field
+        for field in _fields(schema, "", REFS.get(kind, {}), common)
+        if field["name"] not in hidden
+    ]
     for field in fields:
         if field["name"] == BRAND_FIELD.get(kind) and field["type"] == "string":
             field["type"] = "brand"
@@ -161,6 +184,7 @@ def build_form(kind: str, schemas: dict[str, dict[str, Any]]) -> dict[str, Any]:
         "fields": fields,
         "id_from": list(ID_FROM[kind]),
         "has_visual": HAS_VISUAL[kind],
+        "has_atlas": kind in ATLAS_KINDS,
         "visual_limits": {
             "image": ASSET_FILES["image.webp"],
             "thumb": ASSET_FILES["thumb.webp"],
@@ -187,14 +211,27 @@ def value_at(data: dict[str, Any], path: str) -> str:
     return node if isinstance(node, str) else ""
 
 
+def species_id(scientific: str) -> str:
+    """The id of a species: its scientific name in lower case, `genus_species`.
+
+    A genus (`Amphiprion sp.`) is its genus alone.
+    """
+    name = re.sub(r"\s+sp\.?$", "", scientific.strip())
+    return re.sub(r"[^a-z0-9]+", "_", _ascii(name).lower()).strip("_")[:80].strip("_")
+
+
 def suggest_id(kind: str, data: dict[str, Any], taken: set[str]) -> str:
     """An id for a new entry, unique among the `taken` ones ('' when nothing to go on)."""
-    base = slugify(*(value_at(data, path) for path in ID_FROM[kind]))
+    texts = [value_at(data, path) for path in ID_FROM[kind]]
+    if kind in SPECIES_KINDS:
+        base, sep, size = species_id(texts[0]), "_", 80
+    else:
+        base, sep, size = slugify(*texts), "-", 64
     if not base:
         return ""
     candidate, number = base, 2
     while candidate in taken:
-        suffix = f"-{number}"
-        candidate = base[: 64 - len(suffix)].strip("-") + suffix
+        suffix = f"{sep}{number}"
+        candidate = base[: size - len(suffix)].strip(sep) + suffix
         number += 1
     return candidate

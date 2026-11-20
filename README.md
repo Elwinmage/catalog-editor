@@ -4,7 +4,11 @@ A Home Assistant integration to add and edit entries of the
 [ReefTech catalog](https://github.com/Elwinmage/reeftech-catalog) (equipment,
 supplements, parameters, water tests) and of the
 [house catalog](https://github.com/Elwinmage/house-catalog) (trees and objects
-of the house view) from the UI, with the picture upload included.
+of the house view) and the species of the
+[reeftank catalog](https://github.com/Elwinmage/reeftank-catalog) (fish,
+corals, plants, invertebrates) from the UI, with the picture upload included
+(the pictures of a species are an atlas built by the tools of its catalog: the
+editor edits its description).
 
 An entry you save is written in the **user layer shared by every integration
 reading the catalog** (`<config>/reeftech_catalog/user/<section>/`): it is
@@ -60,13 +64,39 @@ storage (`.storage/catalog_editor`).
 - A draft is checked with the **same rules as the catalog CI**: what the editor
   accepts is what the CI accepts. Each catalog repository owns its rules and
   copies them here with its `sync_client.py` (`catalog_rules.py` from
-  reeftech-catalog, `house_catalog_rules.py` from house-catalog); `rules.py`
-  picks the ones of a kind of entry.
+  reeftech-catalog, `house_catalog_rules.py` from house-catalog,
+  `reeftank_catalog_rules.py` from reeftank-catalog); `rules.py` picks the ones
+  of a kind of entry.
 - The catalog client only knows the sections of reeftech-catalog. Another
   catalog describes itself (repository, sections, layout) in a module it copies
-  here (`house_catalog_sections.py`), which `catalogs.py` declares to the
-  client: a new section of that catalog normally needs only its translations
-  here.
+  here (`house_catalog_sections.py`, `reeftank_catalog_sections.py`), which
+  `catalogs.py` declares to the client: a new section of that catalog normally
+  needs only its translations here.
+- reeftank-catalog publishes **one release for all its species** (what the
+  reeftank integration reads), not one per section: `reeftank_pack.py` cuts its
+  manifest into the sections of the editor (fish, corals, plants,
+  invertebrates) and reads their JSON Schemas from the `schema.zip` of that
+  release.
+- The catalogs are picked in a **drop-down list**, each followed by its family:
+  *(reeftech)*, *(reeftank)* or *(house view)*.
+- **Photo of a fish and its animation** (reeftank): a fish has no picture to
+  upload; a photo (side view, head to the right, flat magenta or green
+  background) is turned into the *degraded* atlas the reeftank integration plays
+  (`swim`, `idle`, `turn`; the same code as `scripts/still_atlas.py` of
+  reeftank-catalog, copied here as `reeftank_catalog_still.py`). The photo
+  comes from an image model, with the **fixed, versioned prompt** of
+  reeftank-catalog (`prompts/still_photo.json`) and **your own API key**, or
+  from your own photo (then give its author and license). *Show the prompt*
+  lets you use any other image tool by hand. The photo is checked first (flat
+  background, whole fish, large enough). The entry records where it comes from
+  (`source`: `ai-generated` and the model, or `photo`, author, license), and
+  the pull request holds the atlas and its thumbnail, **never the photo**. A
+  species with a real animation made from videos is not replaced unless you say
+  so.
+  Choose the provider (Google Gemini or OpenAI; another is a function in
+  `image_providers.py`), the key and, if you want, a model in the **options** of
+  the integration. The key stays in the config entry and is never sent back to
+  the card.
 - A **colour** of an entry (trees, objects) is picked or typed as `#rrggbb`.
 - Pictures are normalised (transparent WebP, 512 px and 128 px, size limits).
 - The editor reads the shared pack plus the shared user layer itself, so it sees
@@ -92,15 +122,22 @@ storage (`.storage/catalog_editor`).
 Websocket commands `catalog_editor/…`: `catalogs`, `refresh`, `form`, `entries`,
 `entry`, `suggest_id`, `validate`, `save`, `delete`, `github_status`,
 `github_login`, `github_login_poll`, `github_logout`, `contribute`,
-`contributions`. Pictures are uploaded with
+`contributions`, and for the photo of a fish `image_status`, `image_prompt`,
+`image_generate`, `image_build`. Pictures are uploaded with
 `POST /api/catalog_editor/image` (multipart field `file`); the answer
-carries a `token` to give to `validate` / `save`.
+carries a `token` to give to `validate` / `save`. A photo of a species is
+uploaded with `POST /api/catalog_editor/photo` (fields `file`, optional `key`);
+`image_build` turns the photo into an atlas and answers with a `token` to give
+to `validate` / `save` as `atlas`.
 
 ## Synced files
 
 `custom_components/catalog_editor/catalog_pack.py`,
 `catalog_runtime.py` and `catalog_rules.py` are **copies** made by
-`scripts/sync_client.py` of the catalog repository. Do not edit them here.
+`scripts/sync_client.py` of the catalog repository, and so are
+`house_catalog_*.py` and `reeftank_catalog_*.py` (including the atlas code
+`reeftank_catalog_still.py`; each from its own
+repository). Do not edit them here.
 
 ## Development
 

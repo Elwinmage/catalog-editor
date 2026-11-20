@@ -19,8 +19,10 @@ from custom_components.catalog_editor.const import DOMAIN
 
 SCHEMAS = Path(__file__).parent / "fixtures" / "schema"
 HOUSE_SCHEMAS = Path(__file__).parent / "fixtures" / "house_schema"
+REEFTANK_SCHEMAS = Path(__file__).parent / "fixtures" / "reeftank_schema"
 BASE = "https://github.com/Elwinmage/reeftech-catalog/releases/download"
 HOUSE_BASE = "https://github.com/Elwinmage/house-catalog/releases/download"
+REEFTANK_RELEASES = "https://github.com/Elwinmage/reeftank-catalog/releases"
 KINDS = {
     "equipment": ("item", "category", "task"),
     "supplements": ("supplement",),
@@ -28,9 +30,16 @@ KINDS = {
     "water_tests": ("water_test",),
     "trees": ("tree",),
     "objects": ("object",),
+    "fish": ("fish",),
+    "corals": ("coral",),
+    "plants": ("plant",),
+    "invertebrates": ("invertebrate",),
 }
 #: Sections published by house-catalog, with schemas of their own
 HOUSE = ("trees", "objects")
+#: Sections published by reeftank-catalog: one release for all of them
+REEFTANK = ("fish", "corals", "plants", "invertebrates")
+REEFTANK_VERSION = "2026.11.0"
 
 
 def base_of(section: str) -> str:
@@ -42,8 +51,20 @@ def schema_zip(section: str, extra: dict[str, bytes] | None = None) -> bytes:
     """The schema.zip of a release, built from the schemas of the catalog."""
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as archive:
-        folder = HOUSE_SCHEMAS if section in HOUSE else SCHEMAS
-        for kind in ("common", *KINDS[section]):
+        folder = (
+            HOUSE_SCHEMAS
+            if section in HOUSE
+            else REEFTANK_SCHEMAS
+            if section in REEFTANK
+            else SCHEMAS
+        )
+        # reeftank-catalog has one schema archive for every species
+        kinds = (
+            ("fish", "coral", "plant", "invertebrate")
+            if section in REEFTANK
+            else KINDS[section]
+        )
+        for kind in ("common", *kinds):
             name = f"{kind}.schema.json"
             archive.writestr(name, (folder / name).read_bytes())
         for name, blob in (extra or {}).items():
@@ -68,10 +89,39 @@ def manifest_of(
     }
 
 
-def serve(aioclient_mock, sections=tuple(KINDS)) -> None:
+def reeftank_manifest(
+    blob: bytes, entries: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """The manifest of a reeftank-catalog release (one for every species)."""
+    return {
+        "format": 1,
+        "version": REEFTANK_VERSION,
+        "min_integration": "0.1.0",
+        "notes": "## release",
+        "entries": entries or {},
+        "schema": {
+            "sha256": hashlib.sha256(blob).hexdigest(),
+            "size": len(blob),
+            "file": "schema.zip",
+        },
+    }
+
+
+def serve(aioclient_mock, sections=tuple(KINDS), reeftank_entries=None) -> None:
     """Serve the manifest and the schemas of the sections, each from its repository."""
     aioclient_mock.clear_requests()
+    if any(section in REEFTANK for section in sections):
+        blob = schema_zip("fish")
+        aioclient_mock.get(
+            f"{REEFTANK_RELEASES}/latest/download/manifest.json",
+            text=json.dumps(reeftank_manifest(blob, reeftank_entries)),
+        )
+        aioclient_mock.get(
+            f"{REEFTANK_RELEASES}/download/{REEFTANK_VERSION}/schema.zip", content=blob
+        )
     for section in sections:
+        if section in REEFTANK:
+            continue
         blob = schema_zip(section)
         manifest = manifest_of(section, blob)
         base = base_of(section)

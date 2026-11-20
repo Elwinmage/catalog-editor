@@ -14,9 +14,14 @@
   "options": {
     "step": {
       "init": {
-        "title": "Catalogues",
+        "title": "Catalogues et modèle d'images",
+        "description": "Photos d'espèces (reeftank) : l'éditeur peut demander la photo d'une espèce à un modèle d'images, avec **votre propre** clé API (le coût est à votre charge). La clé n'est plus jamais affichée ; laissez le champ vide pour garder celle déjà enregistrée (actuellement : {key_state}).",
         "data": {
-          "sections": "Catalogues auxquels s'abonner"
+          "sections": "Catalogues auxquels s'abonner",
+          "image_provider": "Fournisseur d'images",
+          "image_key": "Clé API du fournisseur",
+          "image_model": "Modèle (vide : celui par défaut du fournisseur)",
+          "clear_image_key": "Supprimer la clé API enregistrée"
         }
       }
     }
@@ -29,7 +34,11 @@
         "parameters": "Paramètres",
         "water_tests": "Tests d'eau",
         "trees": "Arbres (vue maison)",
-        "objects": "Objets (vue maison)"
+        "objects": "Objets (vue maison)",
+        "fish": "Poissons (reeftank)",
+        "corals": "Coraux (reeftank)",
+        "plants": "Plantes (reeftank)",
+        "invertebrates": "Invertébrés (reeftank)"
       }
     }
   }

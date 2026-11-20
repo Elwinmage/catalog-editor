@@ -14,9 +14,14 @@
   "options": {
     "step": {
       "init": {
-        "title": "Catalogs",
+        "title": "Catalogs and image model",
+        "description": "Photos of species (reeftank): the editor can ask an image model for the photo of a species, with **your own** API key (the cost is yours). The key is never shown again; leave it empty to keep the stored one (currently: {key_state}).",
         "data": {
-          "sections": "Catalogs to subscribe to"
+          "sections": "Catalogs to subscribe to",
+          "image_provider": "Image provider",
+          "image_key": "API key of the provider",
+          "image_model": "Model (empty: the provider's default)",
+          "clear_image_key": "Remove the stored API key"
         }
       }
     }
@@ -29,7 +34,11 @@
         "parameters": "Parameters",
         "water_tests": "Water tests",
         "trees": "Trees (house view)",
-        "objects": "Objects (house view)"
+        "objects": "Objects (house view)",
+        "fish": "Fish (reeftank)",
+        "corals": "Corals (reeftank)",
+        "plants": "Plants (reeftank)",
+        "invertebrates": "Invertebrates (reeftank)"
       }
     }
   }

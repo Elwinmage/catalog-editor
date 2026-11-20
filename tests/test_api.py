@@ -57,11 +57,24 @@ async def test_catalogs(hass, aioclient_mock, hass_ws_client):
         "water_tests",
         "trees",
         "objects",
+        "fish",
+        "corals",
+        "plants",
+        "invertebrates",
     ]
     assert result[4]["kinds"] == ["tree"] and result[5]["kinds"] == ["object"]
     # ...each from the repository that publishes it
     assert result[4]["installed"] == result[5]["installed"] == "2026.11.0"
     assert result[4]["schemas"] is True
+    # the species come from the single release of reeftank-catalog, cut by folder
+    assert [r["kinds"] for r in result[6:]] == [
+        ["fish"],
+        ["coral"],
+        ["plant"],
+        ["invertebrate"],
+    ]
+    assert {r["installed"] for r in result[6:]} == {"2026.11.0"}
+    assert all(r["schemas"] is True for r in result[6:])
     # The packs are the real ones, downloaded (an empty release is served)
     assert result[0] == {
         "section": "equipment",

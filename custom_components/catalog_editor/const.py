@@ -9,6 +9,12 @@ DOMAIN = "catalog_editor"
 #: Client id of the GitHub OAuth App (device flow enabled) used to sign in
 CONF_CLIENT_ID = "client_id"
 
+#: Image model the editor asks for the photo of a species (options; all optional):
+#: the provider, the contributor's own API key and a model other than the default
+CONF_IMAGE_PROVIDER = "image_provider"
+CONF_IMAGE_KEY = "image_key"
+CONF_IMAGE_MODEL = "image_model"
+
 #: Sections of the catalog the editor subscribes to (option; all by default)
 CONF_SECTIONS = "sections"
 

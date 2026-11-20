@@ -59,7 +59,7 @@ const FORM = {
   ],
 };
 
-function setup({ language = "en", providers = true, house = false } = {}) {
+function setup({ language = "en", providers = true, house = false, reeftank = false } = {}) {
   const dom = new JSDOM("<!doctype html><body></body>", { runScripts: "outside-only", pretendToBeVisual: true });
   const { window } = dom;
   window.eval(CODE);
@@ -110,7 +110,20 @@ function setup({ language = "en", providers = true, house = false } = {}) {
                   { section: "objects", kinds: ["object"], installed: "1.0.0", latest: "1.0.0", update_available: false, in_progress: false, error: null, schemas: true, schema_error: null },
                 ]
               : []),
+            ...(reeftank
+              ? ["fish", "corals", "plants", "invertebrates"].map((section) => ({ section, kinds: [section.replace(/s$/, "")], installed: "2026.11.0", latest: "2026.11.0", update_available: false, in_progress: false, error: null, schemas: true, schema_error: null }))
+              : []),
           ];
+        case "image_status":
+          return state.imageStatus || { configured: true, provider: "gemini", model: "gemini-x", providers: [], keys: ["magenta", "green"], licenses: ["CC BY 4.0", "CC0"] };
+        case "image_prompt":
+          return { prompt: `Realistic side view of ${fields.species}, on ${fields.key}` };
+        case "image_generate":
+          if (state.generateError) throw state.generateError;
+          return state.photoReply || { token: "ph1", width: 640, height: 400, problems: [], key: "magenta", source: { type: "ai-generated", model: "gemini-x" }, preview: "data:image/webp;base64,BBBB" };
+        case "image_build":
+          if (state.buildError) throw state.buildError;
+          return { token: "at1", preview: "data:image/webp;base64,CCCC", frame: [208, 120], source: { type: "ai-generated" } };
         case "translate":
           if (state.translateError) throw { code: "translate_failed", message: "no translation service answered" };
           return { translations: { fr: "Chauffage", de: "Heizung" } };
@@ -121,7 +134,7 @@ function setup({ language = "en", providers = true, house = false } = {}) {
         case "brands":
           return [{ key: "redsea", name: "Red Sea", count: 3 }];
         case "form":
-          return FORM;
+          return state.form || FORM;
         case "entry":
           return {
             data: { category: "heater", brand: "Eheim", name: { en: "Eheim 200" } },
@@ -177,6 +190,10 @@ function setup({ language = "en", providers = true, house = false } = {}) {
       }
     },
     async fetchWithAuth(url, options) {
+      if (url.endsWith("/photo")) {
+        calls.push({ command: "photo", url, key: options.body.get("key") });
+        return { ok: state.photoOk !== false, json: async () => state.photoUpload || { token: "ph2", width: 640, height: 400, problems: [], key: "magenta", source: { type: "photo" }, preview: "data:image/webp;base64,DDDD", message: "refused" } };
+      }
       calls.push({ command: "upload", url, file: options.body.get("file").name });
       return { ok: state.uploadOk !== false, json: async () => state.uploadReply || { token: "tok1", preview: "data:image/webp;base64,AAAA", has_alpha: true } };
     },
@@ -199,6 +216,17 @@ const until = async (check, ms = 3000) => {
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const text = (root) => root.textContent.replace(/\s+/g, " ");
+// Catalogs are picked in a drop-down list: select the option whose text starts with the label
+const pick = (root, label) => {
+  const select = root.querySelector("select.catalog-select");
+  const option = [...select.options].find((o) => o.textContent.startsWith(label));
+  select.value = option.value;
+  select.dispatchEvent(new select.ownerDocument.defaultView.Event("change"));
+};
+const catalogOption = (root, label) => {
+  const select = root.querySelector("select.catalog-select");
+  return select && [...select.options].some((o) => o.textContent.startsWith(label));
+};
 const button = (root, label) => [...root.querySelectorAll("button")].find((b) => b.textContent.includes(label));
 const type = (window, input, value) => {
   input.value = value;
@@ -249,8 +277,8 @@ test("items are a tree: brand, then category, then equipment, with counts", asyn
 
 test("supplements are grouped by brand only", async () => {
   const { root } = setup();
-  await until(() => button(root, "Supplements"));
-  button(root, "Supplements").click();
+  await until(() => catalogOption(root, "Supplements"));
+  pick(root, "Supplements");
   await until(() => text(root).includes("Acme (2)"));
   const groups = [...root.querySelectorAll("details.group")];
   assert.deepEqual(groups.map((g) => g.querySelector("summary").textContent), ["Acme (2)", "No brand (1)"]);
@@ -259,8 +287,8 @@ test("supplements are grouped by brand only", async () => {
 
 test("water tests are grouped by brand", async () => {
   const { root } = setup();
-  await until(() => button(root, "Water tests"));
-  button(root, "Water tests").click();
+  await until(() => catalogOption(root, "Water tests"));
+  pick(root, "Water tests");
   await until(() => text(root).includes("Red Sea (2)"));
   const groups = [...root.querySelectorAll("details.group")];
   assert.deepEqual(groups.map((g) => g.querySelector("summary").textContent), ["Red Sea (2)"]);
@@ -281,9 +309,9 @@ test("a catalog not downloaded offers to download it", async () => {
   button(root, "Download").click();
   await until(() => calls.some((c) => c.command === "refresh" && c.section === "equipment"));
   const { root: other, card } = setup();
-  await until(() => other.querySelector(".tabs"));
+  await until(() => other.querySelector("select.catalog-select"));
   card._s.catalogs[1].installed = null;
-  button(other, "Supplements").click();
+  pick(other, "Supplements");
   await until(() => text(other).includes("not downloaded yet"));
 });
 
@@ -820,10 +848,12 @@ test("the catalogs of the house view are listed with the others, in the language
     ["fr", "Arbres (vue maison)", "Objets (vue maison)"],
   ]) {
     const { root } = setup({ language, house: true });
-    await until(() => text(root).includes(trees));
-    assert.ok(text(root).includes(objects));
-    button(root, trees).click();
-    await until(() => button(root, language === "fr" ? "Arbres" : "Trees"));
+    await until(() => catalogOption(root, trees));
+    assert.ok(catalogOption(root, objects));
+    // The catalogs of reeftech say so too
+    assert.ok(catalogOption(root, language === "fr" ? "Équipements (reeftech)" : "Equipment (reeftech)"));
+    pick(root, trees);
+    await until(() => root.querySelector("select.catalog-select").value === "trees");
   }
 });
 
@@ -849,4 +879,190 @@ test("a batch over two catalogs shows every pull request", async () => {
   change(window, attest);
   button(root, "Propose the selected entries").click();
   await until(() => text(root).includes("Pull request opened, entries: 2 (#3, #5)"));
+});
+
+test("the catalogs of reeftank are listed with their family, in the language of the user", async () => {
+  for (const [language, labels] of [
+    ["en", ["Fish (reeftank)", "Corals (reeftank)", "Plants (reeftank)", "Invertebrates (reeftank)"]],
+    ["fr", ["Poissons (reeftank)", "Coraux (reeftank)", "Plantes (reeftank)", "Invertébrés (reeftank)"]],
+  ]) {
+    const { root } = setup({ language, reeftank: true });
+    await until(() => catalogOption(root, labels[0]));
+    for (const label of labels) assert.ok(catalogOption(root, label), label);
+    // a catalog is picked from the list, whatever their number
+    assert.equal(root.querySelectorAll(".tabs button").length > 0, true);
+    pick(root, labels[1]);
+    await until(() => root.querySelector("select.catalog-select").value === "corals");
+  }
+});
+
+test("a pair of numbers is edited as a range and sent once both are filled", async () => {
+  const { window, root, calls, state } = setup({ reeftank: true });
+  state.form = {
+    kind: "fish",
+    section: "fish",
+    title: "Fish",
+    description: null,
+    has_visual: false,
+    id_from: ["scientific"],
+    visual_limits: { image: 1, thumb: 1 },
+    fields: [{ name: "size_cm", required: true, type: "range", bounds: { minimum: 0.1 }, description: "Adult size" }],
+  };
+  await until(() => catalogOption(root, "Fish"));
+  pick(root, "Fish");
+  await until(() => button(root, "New"));
+  button(root, "New").click();
+  const box = await until(() => field(root, "size cm"));
+  const [low, high] = box.querySelectorAll("input[type=number]");
+  assert.equal(low.min, "0.1");
+  type(window, low, "6");
+  await sleep(50);
+  // one value is not a size yet
+  assert.equal(calls.filter((c) => c.command === "validate").some((c) => c.data.size_cm !== undefined), false);
+  type(window, high, "11");
+  await until(() => last(calls, "validate")?.data.size_cm);
+  assert.deepEqual(JSON.parse(JSON.stringify(last(calls, "validate").data.size_cm)), [6, 11]);
+  // emptying one takes the value away again
+  type(window, low, "");
+  await until(() => last(calls, "validate").data.size_cm === undefined);
+});
+
+const FISH_FORM = {
+  kind: "fish",
+  section: "fish",
+  title: "Fish",
+  description: null,
+  has_visual: false,
+  has_atlas: true,
+  id_from: ["scientific"],
+  visual_limits: { image: 1, thumb: 1 },
+  fields: [{ name: "scientific", required: true, type: "text" }],
+};
+
+async function openNewFish(opts = {}) {
+  const ctx = setup({ reeftank: true });
+  ctx.state.form = FISH_FORM;
+  const { root, window } = ctx;
+  await until(() => catalogOption(root, "Fish"));
+  pick(root, "Fish");
+  await until(() => button(root, "New"));
+  button(root, "New").click();
+  await until(() => root.querySelector(".atlas"));
+  return { ...ctx, window, opts };
+}
+
+test("a photo is generated, checked and turned into an animation attached to the draft", async () => {
+  const { root, calls, state } = await openNewFish();
+  assert.ok(button(root, "Show the prompt"));
+  await until(() => button(root, "Generate the photo (gemini-x)"));
+  button(root, "Generate the photo (gemini-x)").click();
+  await until(() => root.querySelector(".photo-preview"));
+  assert.deepEqual(JSON.parse(JSON.stringify(last(calls, "image_generate"))), { command: "image_generate", section: "fish", kind: "fish", species: last(calls, "image_generate").species, key: "magenta" });
+  assert.ok(root.textContent.includes("Generated by gemini-x"));
+  // an AI photo has its model as source: no author nor license to type
+  assert.equal(root.querySelector(".photo-author"), null);
+  assert.equal(root.querySelector(".photo-force"), null);
+  button(root, "Build the animation").click();
+  await until(() => root.querySelector(".atlas-preview"));
+  assert.equal(last(calls, "image_build").photo, "ph1");
+  assert.equal(last(calls, "image_build").force, false);
+  assert.ok(root.textContent.includes("Animation ready"));
+  // the animation goes with the draft
+  await until(() => last(calls, "validate")?.atlas === "at1");
+  state.saveResult = { saved: true };
+});
+
+test("the prompt is shown to be used with any tool", async () => {
+  const { root, window, calls } = await openNewFish();
+  type(window, root.querySelector(".atlas input[type=text]"), "Amphiprion percula");
+  root.querySelector(".photo-key").value = "green";
+  root.querySelector(".photo-key").dispatchEvent(new window.Event("change"));
+  button(root, "Show the prompt").click();
+  const box = await until(() => root.querySelector("textarea.prompt"));
+  assert.equal(box.value, "Realistic side view of Amphiprion percula, on green");
+  assert.equal(last(calls, "image_prompt").key, "green");
+});
+
+test("without a key the generation is not offered, but a photo can be sent", async () => {
+  const ctx = setup({ reeftank: true });
+  ctx.state.form = FISH_FORM;
+  ctx.state.imageStatus = { configured: false, provider: null, model: null, providers: [], keys: ["magenta", "green"], licenses: ["CC BY 4.0", "CC0"] };
+  const { root, window, calls } = ctx;
+  await until(() => catalogOption(root, "Fish"));
+  pick(root, "Fish");
+  await until(() => button(root, "New"));
+  button(root, "New").click();
+  await until(() => root.textContent.includes("enter your own API key"));
+  assert.equal(button(root, "Generate the photo (gemini-x)"), undefined);
+  const input = root.querySelector(".photo-file");
+  Object.defineProperty(input, "files", { value: [new window.File(["x"], "fish.png")] });
+  input.dispatchEvent(new window.Event("change"));
+  await until(() => root.querySelector(".photo-author"));
+  assert.equal(last(calls, "photo").key, "magenta");
+  // a photo needs its author and license
+  type(window, root.querySelector(".photo-author"), "Jane");
+  root.querySelector(".photo-license").value = "CC0";
+  root.querySelector(".photo-license").dispatchEvent(new window.Event("change"));
+  button(root, "Build the animation").click();
+  await until(() => root.querySelector(".atlas-preview"));
+  const build = last(calls, "image_build");
+  assert.equal(build.author, "Jane");
+  assert.equal(build.license, "CC0");
+});
+
+test("a photo that fails the checks is built only on demand", async () => {
+  const { root, calls, state } = await openNewFish();
+  state.photoReply = { token: "ph3", width: 300, height: 200, problems: ["photo too small: 300 px wide"], key: "magenta", source: { type: "ai-generated", model: "gemini-x" }, preview: "data:image/webp;base64,EEEE" };
+  button(root, "Generate the photo (gemini-x)").click();
+  await until(() => root.querySelector(".photo-force"));
+  assert.ok(root.textContent.includes("photo too small"));
+  root.querySelector(".photo-force").click();
+  button(root, "Build the animation").click();
+  await until(() => last(calls, "image_build"));
+  assert.equal(last(calls, "image_build").force, true);
+});
+
+test("a species with a real animation asks before replacing it, an error is shown", async () => {
+  const { root, calls, state } = await openNewFish();
+  button(root, "Generate the photo (gemini-x)").click();
+  await until(() => root.querySelector(".photo-preview"));
+  state.buildError = { code: "real_animation", message: "This species already has an animation made from videos" };
+  button(root, "Build the animation").click();
+  await until(() => root.textContent.includes("already has an animation"));
+  assert.equal(root.querySelector(".atlas-preview"), null);
+  await until(() => root.querySelector(".photo-force"));
+  state.buildError = null;
+  root.querySelector(".photo-force").click();
+  button(root, "Build the animation").click();
+  await until(() => root.querySelector(".atlas-preview"));
+  assert.equal(last(calls, "image_build").force, true);
+  state.generateError = { code: "provider_quota", message: "quota" };
+  button(root, "Generate the photo (gemini-x)").click();
+  await until(() => root.textContent.includes("quota"));
+});
+
+test("an animation is forgotten when the identifier changes", async () => {
+  const { root, window } = await openNewFish();
+  button(root, "Generate the photo (gemini-x)").click();
+  await until(() => root.querySelector(".photo-preview"));
+  button(root, "Build the animation").click();
+  await until(() => root.querySelector(".atlas-preview"));
+  const id = root.querySelector("input[type=text]");
+  type(window, id, "amphiprion_percula");
+  await until(() => !root.querySelector(".atlas-preview"));
+});
+
+test("the current animation of a species is described", async () => {
+  const { root } = await openNewFish();
+  assert.ok(root.textContent.includes("no picture yet"));
+});
+
+test("a refused photo upload shows its error", async () => {
+  const { root, window, state } = await openNewFish();
+  state.photoOk = false;
+  const input = root.querySelector(".photo-file");
+  Object.defineProperty(input, "files", { value: [new window.File(["x"], "fish.png")] });
+  input.dispatchEvent(new window.Event("change"));
+  await until(() => root.textContent.includes("refused"));
+  input.dispatchEvent(new window.Event("change"));
 });

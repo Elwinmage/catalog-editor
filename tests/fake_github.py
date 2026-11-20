@@ -14,8 +14,9 @@ from pytest_homeassistant_custom_component.test_util.aiohttp import (
 
 UP = "Elwinmage/reeftech-catalog"
 HOUSE = "Elwinmage/house-catalog"
+REEFTANK = "Elwinmage/reeftank-catalog"
 #: The catalog repositories; a pull request is a number in one of them
-UPSTREAMS = (UP, HOUSE)
+UPSTREAMS = (UP, HOUSE, REEFTANK)
 API = re.compile(r"https://api\.github\.com/.*")
 
 
@@ -56,8 +57,17 @@ class FakeGithub:
         self.trees[_sha(empty)] = empty
         self.commits[_sha("root", empty)] = (_sha(empty), None)
         self.refs[(HOUSE, "main")] = _sha("root", empty)
+        self.refs[(REEFTANK, "main")] = _sha("root", empty)
         for method in ("get", "post", "patch"):
             getattr(aioclient_mock, method)(API, side_effect=self.handle)
+
+    def set_files(self, repo: str, files: dict[str, bytes]) -> None:
+        """Replace what the main branch of an upstream holds."""
+        tree = {path: self._blob(blob) for path, blob in files.items()}
+        self.trees[_sha(tree)] = tree
+        commit = _sha("root", repo, tree)
+        self.commits[commit] = (_sha(tree), None)
+        self.refs[(repo, "main")] = commit
 
     @property
     def forked(self) -> bool:
