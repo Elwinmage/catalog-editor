@@ -109,13 +109,14 @@ def test_the_house_sections_are_declared_to_the_client():
     assert catalogs.EXTERNAL_KINDS == (
         "tree",
         "object",
+        "pond_fish",
         "fish",
         "coral",
         "plant",
         "invertebrate",
     )
     assert {
-        **dict.fromkeys(("trees", "objects"), "Elwinmage/house-catalog"),
+        **dict.fromkeys(("trees", "objects", "pond_fish"), "Elwinmage/house-catalog"),
         **dict.fromkeys(
             ("fish", "corals", "plants", "invertebrates"),
             "Elwinmage/reeftank-catalog",
@@ -137,7 +138,7 @@ def test_the_house_sections_are_declared_to_the_client():
     assert const.VIEW_GROUPS["tree"] == const.VIEW_GROUPS["object"] == "items"
     assert hints.ID_FROM["tree"] == hints.ID_FROM["object"] == ("name.en",)
     assert hints.HAS_VISUAL["tree"] is True and hints.HAS_VISUAL["task"] is False
-    assert KIND_ORDER[-6:-4] == ("tree", "object") and KIND_ORDER[0] == "task"
+    assert KIND_ORDER[-7:-5] == ("tree", "object") and KIND_ORDER[0] == "task"
 
 
 def test_each_kind_has_the_rules_of_its_catalog():

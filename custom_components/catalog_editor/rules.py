@@ -33,7 +33,7 @@ DESCRIPTORS: dict[str, str] = {
 }
 FOLDERS: dict[str, str] = {**reef.FOLDERS, **house.FOLDERS, **reeftank.FOLDERS}
 
-#: Kinds of the house catalog (trees, objects)
+#: Kinds of the house catalog (trees, objects, pond_fish)
 HOUSE_KINDS = frozenset(house.DESCRIPTORS)
 #: Kinds of the reeftank catalog (fish, coral, plant, invertebrate)
 REEFTANK_KINDS = frozenset(reeftank.DESCRIPTORS)

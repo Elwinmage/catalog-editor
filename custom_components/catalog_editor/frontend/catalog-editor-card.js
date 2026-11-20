@@ -20,6 +20,7 @@
       catalog_water_tests: "Water tests",
       catalog_trees: "Trees",
       catalog_objects: "Objects",
+      catalog_pond_fish: "Pond fish",
       catalog_fish: "Fish",
       catalog_corals: "Corals",
       catalog_invertebrates: "Invertebrates",
@@ -157,6 +158,7 @@
       catalog_water_tests: "Tests d'eau",
       catalog_trees: "Arbres",
       catalog_objects: "Objets",
+      catalog_pond_fish: "Poissons de bassin",
       catalog_fish: "Poissons",
       catalog_corals: "Coraux",
       catalog_invertebrates: "Invertébrés",
@@ -535,7 +537,7 @@
 
     // Which catalog family a section belongs to (shown after its name)
     _origin(section) {
-      if (section === "trees" || section === "objects") return "origin_house";
+      if (["trees", "objects", "pond_fish"].includes(section)) return "origin_house";
       if (["fish", "corals", "invertebrates", "plants"].includes(section)) return "origin_reeftank";
       return "origin_reeftech";
     }

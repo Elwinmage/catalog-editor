@@ -30,13 +30,14 @@ KINDS = {
     "water_tests": ("water_test",),
     "trees": ("tree",),
     "objects": ("object",),
+    "pond_fish": ("pond_fish",),
     "fish": ("fish",),
     "corals": ("coral",),
     "plants": ("plant",),
     "invertebrates": ("invertebrate",),
 }
 #: Sections published by house-catalog, with schemas of their own
-HOUSE = ("trees", "objects")
+HOUSE = ("trees", "objects", "pond_fish")
 #: Sections published by reeftank-catalog: one release for all of them
 REEFTANK = ("fish", "corals", "plants", "invertebrates")
 REEFTANK_VERSION = "2026.11.0"

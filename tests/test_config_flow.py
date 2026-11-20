@@ -49,6 +49,7 @@ async def test_options_change_the_subscriptions(hass, aioclient_mock):
         "water_tests",
         "trees",
         "objects",
+        "pond_fish",
         "fish",
         "corals",
         "plants",
