@@ -39,6 +39,10 @@
       kind_object: "Objects",
       new: "New",
       search: "Search…",
+      water_all: "All waters",
+      water_marine: "Marine",
+      water_freshwater: "Freshwater",
+      water_brackish: "Brackish",
       back: "Back",
       empty: "Nothing here yet.",
       no_brand: "No brand",
@@ -177,6 +181,10 @@
       kind_object: "Objets",
       new: "Nouveau",
       search: "Rechercher…",
+      water_all: "Tous types d'eau",
+      water_marine: "Eau de mer",
+      water_freshwater: "Eau douce",
+      water_brackish: "Eau saumâtre",
       back: "Retour",
       empty: "Rien pour l'instant.",
       no_brand: "Sans marque",
@@ -401,6 +409,7 @@
         kind: null,
         entries: [],
         query: "",
+        water: "",
         mode: "list",
         github: { connected: false, login: null },
         login: null,
@@ -496,7 +505,7 @@
     }
 
     async _openCatalog(section, kind, redraw = true) {
-      Object.assign(this._s, { section, kind, mode: "list", query: "", entries: [], message: null });
+      Object.assign(this._s, { section, kind, mode: "list", query: "", water: "", entries: [], message: null });
       this._refs = {};
       const info = (this._s.catalogs || []).find((c) => c.section === section);
       if (info && info.installed) {
@@ -667,6 +676,25 @@
         ),
       );
       const list = el("div", { class: "list" });
+      // Species say which waters they live in: filter the list by water type
+      if (s.entries.some((e) => Array.isArray(e.water_types))) {
+        const tabs = el("div", { class: "tabs" });
+        for (const water of ["", "marine", "freshwater", "brackish"]) {
+          const count = s.entries.filter((e) => !water || (e.water_types || []).includes(water)).length;
+          tabs.append(
+            el("button", {
+              class: water === s.water ? "on" : "",
+              text: `${this.t(water ? `water_${water}` : "water_all")} (${count})`,
+              onclick: (ev) => {
+                s.water = water;
+                for (const button of tabs.children) button.className = button === ev.currentTarget ? "on" : "";
+                this._fillList(list);
+              },
+            }),
+          );
+        }
+        wrap.append(tabs);
+      }
       this._fillList(list);
       wrap.append(list);
       return wrap;
@@ -675,7 +703,11 @@
     _fillList(list) {
       const s = this._s;
       const needle = s.query.trim().toLowerCase();
-      const shown = s.entries.filter((e) => !needle || `${e.id} ${e.label} ${e.brand || ""}`.toLowerCase().includes(needle));
+      const shown = s.entries.filter(
+        (e) =>
+          (!s.water || (e.water_types || []).includes(s.water)) &&
+          (!needle || `${e.id} ${e.label} ${e.brand || ""}`.toLowerCase().includes(needle)),
+      );
       list.replaceChildren();
       if (!shown.length) {
         list.append(el("div", { class: "sub", text: this.t("empty") }));

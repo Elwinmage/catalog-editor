@@ -173,6 +173,7 @@ def list_entries(view: dict[str, Any], kind: str) -> list[dict[str, Any]]:
             "source": entry.get("source"),
             "brand": entry.get("brand"),
             "category": entry.get("category"),
+            "water_types": entry.get("water_types"),
             "image": entry.get("image"),
             "thumb": entry.get("thumb"),
         }

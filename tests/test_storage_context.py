@@ -6,7 +6,7 @@ import json
 
 from conftest import FakeSource, equipment_view
 
-from custom_components.catalog_editor import context
+from custom_components.catalog_editor import const, context
 from custom_components.catalog_editor.storage import UserCatalog, dump
 
 
@@ -97,6 +97,13 @@ def test_labels_and_lists(tmp_path):
     assert (listed["brand"], listed["category"]) == ("Eheim", "heater")
     assert context.list_entries(view, "item")[0]["label"] == "Eheim 200"
     assert context.list_entries({}, "item") == []
+    assert listed["water_types"] is None
+    fish = {
+        const.VIEW_GROUPS["fish"]: {
+            "guppy": {"name": {"en": "Guppy"}, "water_types": ["freshwater"]}
+        }
+    }
+    assert context.list_entries(fish, "fish")[0]["water_types"] == ["freshwater"]
 
 
 def test_locate_visual(tmp_path):

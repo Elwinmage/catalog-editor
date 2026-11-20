@@ -87,6 +87,11 @@ function setup({ language = "en", providers = true, house = false, reeftank = fa
       { id: "a-ca", label: "A Ca", source: "pack", brand: "Acme" },
       { id: "z-mg", label: "Z Mg", source: "user" },
     ],
+    "fish/fish": [
+      { id: "clownfish", label: "Clownfish", source: "pack", water_types: ["marine"] },
+      { id: "guppy", label: "Guppy", source: "pack", water_types: ["freshwater", "brackish"] },
+      { id: "molly", label: "Molly", source: "pack", water_types: ["freshwater"] },
+    ],
     "water_tests/water_test": [
       { id: "rs-kit", label: "Red Sea Kit", source: "pack", brand: "Red Sea" },
       { id: "rs-nitrate", label: "Red Sea Nitrate", source: "pack", brand: "Red Sea" },
@@ -925,6 +930,29 @@ test("a pair of numbers is edited as a range and sent once both are filled", asy
   // emptying one takes the value away again
   type(window, low, "");
   await until(() => last(calls, "validate").data.size_cm === undefined);
+});
+
+test("species are filtered by the water they live in", async () => {
+  const { root } = setup({ reeftank: true });
+  await until(() => catalogOption(root, "Fish"));
+  pick(root, "Fish");
+  await until(() => root.querySelectorAll(".entry").length === 3);
+  const tab = (name) => [...root.querySelectorAll(".tabs button")].find((b) => b.textContent.startsWith(name));
+  assert.match(text(root), /All waters \(3\).*Marine \(1\).*Freshwater \(2\).*Brackish \(1\)/);
+  tab("Freshwater").click();
+  assert.equal(root.querySelectorAll(".entry").length, 2);
+  assert.match(text(root), /Guppy/);
+  assert.doesNotMatch(text(root), /Clownfish/);
+  tab("Marine").click();
+  assert.equal(root.querySelectorAll(".entry").length, 1);
+  tab("All waters").click();
+  assert.equal(root.querySelectorAll(".entry").length, 3);
+});
+
+test("a catalog without water types has no such filter", async () => {
+  const { root } = setup();
+  await until(() => root.querySelectorAll(".entry").length);
+  assert.doesNotMatch(text(root), /All waters/);
 });
 
 const FISH_FORM = {
