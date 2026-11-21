@@ -200,7 +200,7 @@ function setup({ language = "en", providers = true, house = false, reeftank = fa
     },
     async fetchWithAuth(url, options) {
       if (url.endsWith("/photo")) {
-        calls.push({ command: "photo", url, key: options.body.get("key") });
+        calls.push({ command: "photo", url, key: options.body.get("key"), kind: options.body.get("kind") });
         return { ok: state.photoOk !== false, json: async () => state.photoUpload || { token: "ph2", width: 640, height: 400, problems: [], key: "magenta", source: { type: "photo" }, preview: "data:image/webp;base64,DDDD", message: "refused" } };
       }
       calls.push({ command: "upload", url, file: options.body.get("file").name });
@@ -1021,7 +1021,7 @@ test("a photo is generated, checked and turned into an animation attached to the
   // an AI photo has its model as source: no author nor license to type
   assert.equal(root.querySelector(".photo-author"), null);
   assert.equal(root.querySelector(".photo-force"), null);
-  button(root, "Build the animation").click();
+  button(root, "Keep it (build the animation)").click();
   await until(() => root.querySelector(".atlas-preview"));
   assert.equal(last(calls, "image_build").photo, "ph1");
   assert.equal(last(calls, "image_build").force, false);
@@ -1039,7 +1039,7 @@ test("the animation opens beside the form, plays the clips in one loop and follo
   await until(() => button(root, "Generate the photo (gemini-x)"));
   button(root, "Generate the photo (gemini-x)").click();
   await until(() => root.querySelector(".photo-preview"));
-  button(root, "Build the animation").click();
+  button(root, "Keep it (build the animation)").click();
   await until(() => root.querySelector(".atlas-preview"));
   button(root, "Play the animation").click();
   await until(() => root.querySelectorAll(".preview canvas").length === 1);
@@ -1065,7 +1065,7 @@ test("the animation opens beside the form, plays the clips in one loop and follo
   }
   // a new atlas is played at once
   const before = calls.filter((c) => c.command === "atlas_view").length;
-  button(root, "Build the animation").click();
+  button(root, "Keep it (build the animation)").click();
   await until(() => calls.filter((c) => c.command === "atlas_view").length === before + 1);
   button(root, "Close").click();
   assert.equal(root.querySelector(".preview"), null);
@@ -1128,7 +1128,7 @@ test("without a key the generation is not offered, but a photo can be sent", asy
   type(window, root.querySelector(".photo-author"), "Jane");
   root.querySelector(".photo-license").value = "CC0";
   root.querySelector(".photo-license").dispatchEvent(new window.Event("change"));
-  button(root, "Build the animation").click();
+  button(root, "Keep it (build the animation)").click();
   await until(() => root.querySelector(".atlas-preview"));
   const build = last(calls, "image_build");
   assert.equal(build.author, "Jane");
@@ -1142,7 +1142,7 @@ test("a photo that fails the checks is built only on demand", async () => {
   await until(() => root.querySelector(".photo-force"));
   assert.ok(root.textContent.includes("photo too small"));
   root.querySelector(".photo-force").click();
-  button(root, "Build the animation").click();
+  button(root, "Keep it (build the animation)").click();
   await until(() => last(calls, "image_build"));
   assert.equal(last(calls, "image_build").force, true);
 });
@@ -1152,13 +1152,13 @@ test("a species with a real animation asks before replacing it, an error is show
   button(root, "Generate the photo (gemini-x)").click();
   await until(() => root.querySelector(".photo-preview"));
   state.buildError = { code: "real_animation", message: "This species already has an animation made from videos" };
-  button(root, "Build the animation").click();
+  button(root, "Keep it (build the animation)").click();
   await until(() => root.textContent.includes("already has an animation"));
   assert.equal(root.querySelector(".atlas-preview"), null);
   await until(() => root.querySelector(".photo-force"));
   state.buildError = null;
   root.querySelector(".photo-force").click();
-  button(root, "Build the animation").click();
+  button(root, "Keep it (build the animation)").click();
   await until(() => root.querySelector(".atlas-preview"));
   assert.equal(last(calls, "image_build").force, true);
   state.generateError = { code: "provider_quota", message: "quota" };
@@ -1170,7 +1170,7 @@ test("an animation is forgotten when the identifier changes", async () => {
   const { root, window } = await openNewFish();
   button(root, "Generate the photo (gemini-x)").click();
   await until(() => root.querySelector(".photo-preview"));
-  button(root, "Build the animation").click();
+  button(root, "Keep it (build the animation)").click();
   await until(() => root.querySelector(".atlas-preview"));
   const id = root.querySelector("input[type=text]");
   type(window, id, "amphiprion_percula");
@@ -1190,4 +1190,71 @@ test("a refused photo upload shows its error", async () => {
   input.dispatchEvent(new window.Event("change"));
   await until(() => root.textContent.includes("refused"));
   input.dispatchEvent(new window.Event("change"));
+});
+
+const PLANT_FORM = { ...FISH_FORM, kind: "plant", section: "plants", title: "Plant" };
+
+function plantReply(token, key, extra = {}) {
+  return { token, width: 600, height: 800, problems: [], key, default_key: "magenta", advice: null, source: { type: "ai-generated", model: "gemini-x" }, preview: `data:image/webp;base64,RAW${token}`, keyed: `data:image/webp;base64,KEY${token}`, ...extra };
+}
+
+async function openNewPlant() {
+  const ctx = setup({ reeftank: true });
+  ctx.state.form = PLANT_FORM;
+  const { root } = ctx;
+  await until(() => catalogOption(root, "Plant"));
+  pick(root, "Plant");
+  await until(() => button(root, "New"));
+  button(root, "New").click();
+  await until(() => root.querySelector(".atlas"));
+  return ctx;
+}
+
+test("a plant is shown keyed out, and tried again on the same or another background", async () => {
+  const { root, calls, state } = await openNewPlant();
+  assert.ok(root.querySelector(".atlas .help").textContent.includes("one specimen"));
+  state.photoReply = plantReply("ph1", "magenta");
+  await until(() => button(root, "Generate the photo (gemini-x)"));
+  button(root, "Generate the photo (gemini-x)").click();
+  await until(() => root.querySelector(".keyed-preview"));
+  // the server chooses the background of a plant nobody chose for
+  const first = last(calls, "image_generate");
+  assert.equal(first.kind, "plant");
+  assert.equal("key" in first, false);
+  assert.ok(root.querySelector(".photo-preview"));
+  assert.equal(root.querySelector(".history"), null); // one attempt: nothing to compare
+  // the same background: the key is the one of the photo, now explicit
+  state.photoReply = plantReply("ph2", "magenta", { problems: ["the plant touches the edge of the picture"] });
+  button(root, "Try again (same background)").click();
+  await until(() => root.textContent.includes("touches the edge"));
+  assert.equal(last(calls, "image_generate").key, "magenta");
+  // another background, with the advice against green for a plant that is not listed
+  state.photoReply = plantReply("ph3", "green", { advice: "green turns it grey" });
+  button(root, "Try again on a green background").click();
+  await until(() => root.querySelector(".advice"));
+  assert.equal(last(calls, "image_generate").key, "green");
+  assert.ok(root.querySelector(".advice").textContent.includes("green plant grey"));
+  // the attempts stay, and one can be looked at again then kept
+  await until(() => root.querySelectorAll(".history button").length === 3);
+  root.querySelectorAll(".history button")[0].click();
+  await until(() => root.querySelector(".history button.current") === root.querySelectorAll(".history button")[0]);
+  button(root, "Keep it (build the animation)").click();
+  await until(() => root.querySelector(".atlas-preview"));
+  assert.equal(last(calls, "image_build").photo, "ph1");
+});
+
+test("a plant photo sent by hand says it is a plant's", async () => {
+  const { root, window, calls } = await openNewPlant();
+  const input = root.querySelector(".photo-file");
+  Object.defineProperty(input, "files", { value: [new window.File(["x"], "plant.png")] });
+  input.dispatchEvent(new window.Event("change"));
+  await until(() => last(calls, "photo"));
+  assert.equal(last(calls, "photo").kind, "plant");
+});
+
+test("a plant has a picture to look at, not a loop of clips", async () => {
+  const { window } = await openNewPlant();
+  const Card = window.customElements.get("catalog-editor-card");
+  const still = { still: { from: 0, to: 0, fps: 1, loop: false } };
+  assert.equal(Card.playlist(still).map((step) => step.name).join(), "still");
 });

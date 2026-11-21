@@ -334,9 +334,9 @@ def test_the_forms_ask_for_the_description_only():
         False,
         ["scientific"],
     )
-    # only a fish has a photo to make an animation from
+    # a fish and a plant have a photo to make a picture from
     assert fish["has_atlas"] is True
-    assert build_form("plant", schemas())["has_atlas"] is False
+    assert build_form("plant", schemas())["has_atlas"] is True
     fields = flat(fish["fields"])
     assert "json" not in {t for n, t in fields.items() if n != "behavior.shoal"}
     assert fields["names"] == "i18n" and fields["scientific"] == "string"

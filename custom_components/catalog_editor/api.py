@@ -60,7 +60,7 @@ from .github import (
     start_login,
 )
 from .hints import ATLAS_KINDS, HAS_VISUAL, SPECIES_KINDS
-from .image_providers import PROVIDERS, ProviderError, generate_image
+from .image_providers import DEFAULT_ASPECT, PROVIDERS, ProviderError, generate_image
 from .images import (
     MAX_PHOTO_BYTES,
     MAX_UPLOAD_BYTES,
@@ -70,8 +70,15 @@ from .images import (
     atlas_preview,
     build_degraded,
     inspect_photo,
+    keyed_preview,
     photo_preview,
     process_image,
+)
+from .reeftank_catalog_plant import (
+    key_advice,
+    plant_aspect,
+    plant_key,
+    render_plant_prompt,
 )
 from .reeftank_catalog_still import KEYS as BACKGROUND_KEYS
 from .reeftank_catalog_still import is_real_animation, render_prompt
@@ -566,6 +573,11 @@ _IMAGE_TARGET = {
     vol.Required("kind"): vol.In(list(ATLAS_KINDS)),
 }
 _KEY = vol.In(list(BACKGROUND_KEYS))
+#: What a plant needs besides its name: its id and the draft (zone, English name)
+_PLANT_FIELDS = {
+    vol.Optional("entry_id"): str,
+    vol.Optional("descriptor"): dict,
+}
 
 
 def _settings(data: EditorData) -> tuple[str, str, str] | None:
@@ -582,6 +594,7 @@ async def _photo_reply(
 ) -> dict[str, Any]:
     """What the card needs to show a photo and to ask for its atlas."""
     preview = await hass.async_add_executor_job(photo_preview, photo.blob)
+    keyed = await hass.async_add_executor_job(keyed_preview, photo)
     return {
         "token": data.keep(data.photos, photo),
         "width": photo.size[0],
@@ -590,7 +603,47 @@ async def _photo_reply(
         "key": photo.key,
         "source": photo.source,
         "preview": preview,
+        "keyed": keyed,
     }
+
+
+class _Request:
+    """What is asked of an image model for a species: prompt, ratio, background."""
+
+    def __init__(self, msg: dict[str, Any]) -> None:
+        self.kind: str = msg["kind"]
+        species = msg["species"].strip()
+        if self.kind == "plant":
+            plant_id = msg.get("entry_id") or species.lower().replace(" ", "_")
+            desc = _descriptor(msg.get("descriptor"), species)
+            self.key: str = msg.get("key") or plant_key(plant_id)
+            try:
+                self.prompt = render_plant_prompt(plant_id, desc, self.key)
+                self.aspect = plant_aspect(plant_id, desc)
+            except ValueError as err:
+                raise _Refused(
+                    "no_growth_form", "Choose the zone of the plant first"
+                ) from err
+            self.default_key = plant_key(plant_id)
+            self.advice = key_advice(plant_id, self.key)
+        else:
+            self.key = msg.get("key") or "magenta"
+            self.prompt = render_prompt(species, self.key)
+            self.aspect = DEFAULT_ASPECT
+            self.default_key = "magenta"
+            self.advice = None
+
+
+def _descriptor(raw: Any, species: str) -> dict[str, Any]:
+    """The few fields of a draft that give the growth form of a plant."""
+    desc: dict[str, Any] = {"scientific": species}
+    if isinstance(raw, dict):
+        if isinstance(raw.get("zone"), str):
+            desc["zone"] = raw["zone"]
+        names = raw.get("names")
+        if isinstance(names, dict) and isinstance(names.get("en"), str):
+            desc["names"] = {"en": names["en"]}
+    return desc
 
 
 @_command(_IMAGE_TARGET, "image_status")
@@ -615,20 +668,28 @@ async def ws_image_status(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str,
     {
         **_IMAGE_TARGET,
         vol.Required("species"): vol.All(str, vol.Length(min=2, max=MAX_SPECIES)),
-        vol.Optional("key", default="magenta"): _KEY,
+        vol.Optional("key"): _KEY,
+        **_PLANT_FIELDS,
     },
     "image_prompt",
 )
-async def ws_image_prompt(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, str]:
+async def ws_image_prompt(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
     """The fixed prompt for a species, to use with any image tool by hand."""
-    return {"prompt": render_prompt(msg["species"].strip(), msg["key"])}
+    request = _Request(msg)
+    return {
+        "prompt": request.prompt,
+        "key": request.key,
+        "default_key": request.default_key,
+        "advice": request.advice,
+    }
 
 
 @_command(
     {
         **_IMAGE_TARGET,
         vol.Required("species"): vol.All(str, vol.Length(min=2, max=MAX_SPECIES)),
-        vol.Optional("key", default="magenta"): _KEY,
+        vol.Optional("key"): _KEY,
+        **_PLANT_FIELDS,
     },
     "image_generate",
 )
@@ -640,6 +701,7 @@ async def ws_image_generate(hass: HomeAssistant, msg: dict[str, Any]) -> dict[st
         raise _Refused(
             "image_not_configured", "Set an image provider and its API key first"
         )
+    request = _Request(msg)
     provider, api_key, model = settings
     name = model or PROVIDERS[provider].default_model
     try:
@@ -648,16 +710,24 @@ async def ws_image_generate(hass: HomeAssistant, msg: dict[str, Any]) -> dict[st
             provider,
             api_key,
             model,
-            render_prompt(msg["species"].strip(), msg["key"]),
+            request.prompt,
+            request.aspect,
         )
         photo = await hass.async_add_executor_job(
-            inspect_photo, blob, {"type": "ai-generated", "model": name}, msg["key"]
+            inspect_photo,
+            blob,
+            {"type": "ai-generated", "model": name},
+            request.key,
+            request.kind,
         )
     except ProviderError as err:
         raise _Refused(err.code, str(err)) from err
     except ImageError as err:
         raise _Refused(str(err), f"The generated picture is refused: {err}") from err
-    return await _photo_reply(hass, data, photo)
+    reply = await _photo_reply(hass, data, photo)
+    reply["advice"] = request.advice
+    reply["default_key"] = request.default_key
+    return reply
 
 
 def _entry_id_ok(target: _Target, entry_id: str) -> bool:
@@ -688,6 +758,8 @@ async def ws_image_build(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, 
     if msg["photo"] not in data.photos:
         raise _Refused("unknown_photo", "The photo expired: send it again")
     photo = data.photos[msg["photo"]][0]
+    if photo.kind != target.kind:
+        raise _Refused("photo_kind", f"This photo was made for a {photo.kind}")
     if not _entry_id_ok(target, entry_id):
         raise _Refused("invalid_id", f"{entry_id!r} is not a valid id for the files")
     if photo.problems and not msg["force"]:
@@ -1197,12 +1269,14 @@ class PhotoUploadView(HomeAssistantView):
             return self.json_message("Field 'file' expected", 400, "invalid_format")
         blob = upload.file.read(MAX_PHOTO_BYTES + 1)
         key = form.get("key")
+        kind = form.get("kind")
         try:
             photo = await hass.async_add_executor_job(
                 inspect_photo,
                 blob,
                 {"type": "photo"},
                 key if key in BACKGROUND_KEYS else None,
+                kind if kind in ATLAS_KINDS else "fish",
             )
             reply = await _photo_reply(hass, data, photo)
         except ImageError as err:

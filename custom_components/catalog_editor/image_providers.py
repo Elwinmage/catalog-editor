@@ -12,9 +12,9 @@ from __future__ import annotations
 import base64
 import binascii
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
 from aiohttp import ClientError, ClientSession, ClientTimeout, FormData
 
@@ -92,7 +92,20 @@ def _decode(data: Any) -> bytes:
     return blob
 
 
-async def gemini(session: ClientSession, key: str, model: str, prompt: str) -> bytes:
+#: Picture ratios asked for (a fish is wider than high, a stem plant the other way)
+DEFAULT_ASPECT = "3:2"
+#: Size asked of OpenAI and of the Cloudflare FLUX.2 models for each ratio
+_OPENAI_SIZES = {"3:2": "1536x1024", "3:4": "1024x1536", "1:1": "1024x1024"}
+_FLUX_SIZES = {"3:2": (1536, 1024), "3:4": (1024, 1536), "1:1": (1024, 1024)}
+
+
+async def gemini(
+    session: ClientSession,
+    key: str,
+    model: str,
+    prompt: str,
+    aspect: str = DEFAULT_ASPECT,
+) -> bytes:
     """Google Gemini (`generateContent`, an image model)."""
     payload = await _post(
         session,
@@ -102,7 +115,7 @@ async def gemini(session: ClientSession, key: str, model: str, prompt: str) -> b
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {
                 "responseModalities": ["TEXT", "IMAGE"],
-                "imageConfig": {"aspectRatio": "3:2"},  # a fish is longer than high
+                "imageConfig": {"aspectRatio": aspect},
             },
         },
     )
@@ -118,13 +131,24 @@ async def gemini(session: ClientSession, key: str, model: str, prompt: str) -> b
     raise ProviderError("provider_no_image", "The image service sent no picture")
 
 
-async def openai(session: ClientSession, key: str, model: str, prompt: str) -> bytes:
+async def openai(
+    session: ClientSession,
+    key: str,
+    model: str,
+    prompt: str,
+    aspect: str = DEFAULT_ASPECT,
+) -> bytes:
     """OpenAI (`images/generations`)."""
     payload = await _post(
         session,
         OPENAI_URL,
         {"Authorization": f"Bearer {key}"},
-        {"model": model, "prompt": prompt, "size": "1536x1024", "n": 1},
+        {
+            "model": model,
+            "prompt": prompt,
+            "size": _OPENAI_SIZES.get(aspect, "1536x1024"),
+            "n": 1,
+        },
     )
     items = payload.get("data") or []
     if not items or not isinstance(items[0], dict) or not items[0].get("b64_json"):
@@ -133,7 +157,11 @@ async def openai(session: ClientSession, key: str, model: str, prompt: str) -> b
 
 
 async def cloudflare(
-    session: ClientSession, key: str, model: str, prompt: str
+    session: ClientSession,
+    key: str,
+    model: str,
+    prompt: str,
+    aspect: str = DEFAULT_ASPECT,
 ) -> bytes:
     """Cloudflare Workers AI (FLUX): the key is `<account id>:<API token>`."""
     account, _, token = key.partition(":")
@@ -148,11 +176,12 @@ async def cloudflare(
     if not _CF_MODEL_RE.match(model):
         raise ProviderError("provider_refused", f"Not a Workers AI model: {model}")
     body: dict[str, Any] | FormData = {"prompt": prompt}
-    if "/flux-2" in model:  # these take a form, not JSON; a fish is wider than high
+    if "/flux-2" in model:  # these take a form, not JSON, with the size of the picture
+        width, height = _FLUX_SIZES.get(aspect, (1536, 1024))
         body = FormData()
         body.add_field("prompt", prompt)
-        body.add_field("width", "1536")
-        body.add_field("height", "1024")
+        body.add_field("width", str(width))
+        body.add_field("height", str(height))
     payload = await _post(
         session,
         CLOUDFLARE_URL.format(account=account.strip(), model=model),
@@ -167,6 +196,19 @@ async def cloudflare(
     return _decode(output["image"])
 
 
+class Generator(Protocol):
+    """What a provider does: a picture from a prompt (`aspect` is optional)."""
+
+    def __call__(
+        self,
+        session: ClientSession,
+        key: str,
+        model: str,
+        prompt: str,
+        aspect: str = DEFAULT_ASPECT,
+    ) -> Awaitable[bytes]: ...
+
+
 @dataclass(frozen=True)
 class Provider:
     """An image model service."""
@@ -174,7 +216,7 @@ class Provider:
     id: str
     name: str
     default_model: str
-    generate: Callable[[ClientSession, str, str, str], Awaitable[bytes]]
+    generate: Generator
 
 
 PROVIDERS: dict[str, Provider] = {
@@ -190,9 +232,14 @@ PROVIDERS: dict[str, Provider] = {
 
 
 async def generate_image(
-    session: ClientSession, provider: str, key: str, model: str, prompt: str
+    session: ClientSession,
+    provider: str,
+    key: str,
+    model: str,
+    prompt: str,
+    aspect: str = DEFAULT_ASPECT,
 ) -> bytes:
-    """The picture a provider makes of a prompt."""
+    """The picture a provider makes of a prompt (`aspect`: its ratio)."""
     return await PROVIDERS[provider].generate(
-        session, key, model or PROVIDERS[provider].default_model, prompt
+        session, key, model or PROVIDERS[provider].default_model, prompt, aspect
     )

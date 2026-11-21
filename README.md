@@ -102,6 +102,22 @@ storage (`.storage/catalog_editor`).
   `stay`, `swim`, `turn`, then `turn` again drawn mirrored (so the fish faces the
   way it started), and over again. It plays the animation the entry has, or the
   one just built, on a water, dark or light background.
+- **Photo of a plant, and trying again until it suits**: a plant has one
+  picture (one specimen standing on the bottom of a square frame, clip `still`),
+  made from the plant prompt of reeftank-catalog (`prompts/still_plant.json`;
+  the form of the plant comes from its zone, so choose the zone first; the code
+  is `reeftank_catalog_plant.py`). A plant is asked on a **magenta** background:
+  green is only for the species listed in `species_keys` (red, pink or purple
+  plants), because a green plant on a green background is keyed out and turns
+  grey. After each generation the card shows the picture received **beside the
+  same picture once its background is removed**, on a checkerboard, so that a
+  grey or eaten plant is seen before anything is built, with the result of the
+  automatic checks. Then *Keep it* builds the picture, or *Try again* asks the
+  image model again, **on the same background or on the other one** (choosing
+  green for a plant that is not listed shows a warning). The attempts of the
+  session stay as thumbnails to compare and go back to one. An entry that
+  already has a picture offers *Regenerate the picture*; nothing changes in the
+  entry until the new picture is built and the entry saved.
   Choose the provider (Google Gemini, OpenAI or Cloudflare Workers AI, whose key is written `<account id>:<API token>` and which has a free daily allowance; another is a function in
   `image_providers.py`), the key and, if you want, a model in the **options** of
   the integration. The key stays in the config entry and is never sent back to
@@ -131,7 +147,7 @@ storage (`.storage/catalog_editor`).
 Websocket commands `catalog_editor/…`: `catalogs`, `refresh`, `form`, `entries`,
 `entry`, `suggest_id`, `validate`, `save`, `delete`, `github_status`,
 `github_login`, `github_login_poll`, `github_logout`, `contribute`,
-`contributions`, and for the photo of a fish `image_status`, `image_prompt`,
+`contributions`, and for the photo of a fish or a plant `image_status`, `image_prompt`,
 `image_generate`, `image_build`. Pictures are uploaded with
 `POST /api/catalog_editor/image` (multipart field `file`); the answer
 carries a `token` to give to `validate` / `save`. A photo of a species is

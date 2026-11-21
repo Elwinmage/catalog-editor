@@ -14,7 +14,14 @@ from typing import cast
 import numpy as np
 from PIL import Image, UnidentifiedImageError
 
-from .reeftank_catalog_still import Still, build_still, check_photo, detect_key
+from .reeftank_catalog_plant import build_plant_still, check_plant_photo
+from .reeftank_catalog_still import (
+    Still,
+    build_still,
+    check_photo,
+    detect_key,
+    key_out,
+)
 from .rules import ASSET_FILES
 
 IMAGE_SIDE = 512
@@ -114,6 +121,8 @@ class Photo:
     key: str | None
     #: Where it comes from: `type` (photo or ai-generated) and, for a model, `model`
     source: dict[str, str]
+    #: What it is the photo of: a fish (side view) or a plant (one specimen)
+    kind: str = "fish"
 
 
 def _open(blob: bytes) -> Image.Image:
@@ -135,17 +144,46 @@ def _open(blob: bytes) -> Image.Image:
         raise ImageError("unreadable") from err
 
 
-def inspect_photo(blob: bytes, source: dict[str, str], key: str | None = None) -> Photo:
+def inspect_photo(
+    blob: bytes, source: dict[str, str], key: str | None = None, kind: str = "fish"
+) -> Photo:
     """Read and check a photo (`key`: the background asked for, else detected)."""
     picture = _open(blob)
     detected = detect_key(np.asarray(picture, dtype=np.float64))
+    check = check_plant_photo if kind == "plant" else check_photo
     return Photo(
         blob,
         picture.size,
-        tuple(check_photo(picture, key)),
+        tuple(check(picture, key)),
         key or detected,
         source,
+        kind,
     )
+
+
+#: Squares of the checkerboard the keyed-out photo is shown on, px
+CHECKER = 16
+CHECKER_COLORS = ((205, 205, 205), (245, 245, 245))
+
+
+def keyed_preview(photo: Photo) -> str:
+    """The photo once its background is keyed out, on a checkerboard, as a `data:` URL.
+
+    This is what the atlas is made of: a plant eaten by the key (a green plant on
+    a green background goes grey or transparent) shows at once, before any
+    atlas is built.
+    """
+    keyed = key_out(_open(photo.blob), photo.key)
+    keyed.thumbnail((PREVIEW_SIDE, PREVIEW_SIDE), Image.Resampling.LANCZOS)
+    width, height = keyed.size
+    rows, cols = np.indices((height, width))
+    squares = ((rows // CHECKER + cols // CHECKER) % 2).astype(np.uint8)
+    board = np.array(CHECKER_COLORS, dtype=np.uint8)[squares]
+    shown = Image.fromarray(board, "RGB").convert("RGBA")
+    shown.alpha_composite(keyed)
+    buffer = io.BytesIO()
+    shown.convert("RGB").save(buffer, "WEBP", quality=PREVIEW_QUALITY)
+    return f"data:image/webp;base64,{base64.b64encode(buffer.getvalue()).decode()}"
 
 
 def photo_preview(blob: bytes) -> str:
@@ -161,7 +199,8 @@ def build_degraded(
     photo: Photo, entry_id: str, source: dict[str, str], key: str | None
 ) -> Still:
     """The degraded atlas of a species made from a photo."""
-    return build_still(_open(photo.blob), entry_id, source, key=key or photo.key)
+    build = build_plant_still if photo.kind == "plant" else build_still
+    return build(_open(photo.blob), entry_id, source, key=key or photo.key)
 
 
 def atlas_preview(still: Still) -> str:

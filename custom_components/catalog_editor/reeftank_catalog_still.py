@@ -182,7 +182,9 @@ def _largest_blob(mask: np.ndarray) -> np.ndarray:
     rows, cols = -(-height // BLOCK), -(-width // BLOCK)
     padded = np.zeros((rows * BLOCK, cols * BLOCK), dtype=bool)
     padded[:height, :width] = mask
-    cells = np.asarray(padded.reshape(rows, BLOCK, cols, BLOCK).any(axis=(1, 3)), dtype=bool)
+    cells = np.asarray(
+        padded.reshape(rows, BLOCK, cols, BLOCK).any(axis=(1, 3)), dtype=bool
+    )
     for _ in range(GAP_BLOCKS):  # grow, so that the gaps close
         grown = cells.copy()
         grown[1:] |= cells[:-1]

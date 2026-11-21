@@ -8,6 +8,7 @@ import json
 import time
 from pathlib import Path
 
+import numpy as np
 import pytest
 from aiohttp import ClientError, FormData
 from fake_github import REEFTANK
@@ -19,6 +20,7 @@ from test_reeftank_catalog import editor as species_editor  # noqa: F401
 from test_reeftank_catalog import gh as fake_github_fixture  # noqa: F401
 
 from custom_components.catalog_editor import image_providers, images
+from custom_components.catalog_editor import reeftank_catalog_plant as plant
 from custom_components.catalog_editor.api import PendingAtlas
 from custom_components.catalog_editor.const import (
     CONF_IMAGE_KEY,
@@ -358,8 +360,11 @@ async def test_the_status_never_shows_the_key(editor, hass):
     hass.data[T].image = {CONF_IMAGE_PROVIDER: "unknown", CONF_IMAGE_KEY: "k"}
     status = (await call(editor, "image_status", section="fish", kind="fish"))["result"]
     assert status["configured"] is False
-    # only fish have an atlas to make
-    assert "error" in await call(editor, "image_status", section="plants", kind="plant")
+    # fish and plants have an atlas to make, corals do not
+    assert "result" in await call(
+        editor, "image_status", section="plants", kind="plant"
+    )
+    assert "error" in await call(editor, "image_status", section="corals", kind="coral")
 
 
 async def test_the_prompt_is_the_fixed_one(editor):
@@ -680,3 +685,149 @@ async def test_the_image_model_is_an_option(hass, aioclient_mock):
     await hass.async_block_till_done(wait_background_tasks=True)
     assert await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done(wait_background_tasks=True)
+
+
+# -- plants: a specimen on a flat background, regenerated until it suits ----------------
+
+PLANT = {"section": "plants", "kind": "plant", "species": "Egeria densa"}
+STEM = {"zone": "background", "names": {"en": "Brazilian waterweed"}}
+
+
+def plant_bytes(bg=(255, 0, 255), leaf=(30, 150, 40), size=(600, 800)) -> bytes:
+    """A stem with leaves, well inside the picture."""
+    image = Image.new("RGB", size, bg)
+    draw = ImageDraw.Draw(image)
+    w, h = size
+    draw.rectangle((w * 0.47, h * 0.15, w * 0.53, h * 0.85), fill=leaf)
+    for i in range(6):
+        y = h * (0.2 + i * 0.1)
+        draw.ellipse((w * 0.3, y, w * 0.5, y + 50), fill=leaf)
+        draw.ellipse((w * 0.5, y + 20, w * 0.7, y + 70), fill=leaf)
+    buffer = io.BytesIO()
+    image.save(buffer, "PNG")
+    return buffer.getvalue()
+
+
+async def test_a_plant_prompt_follows_its_growth_form_and_background(editor):
+    ask = {**PLANT, "descriptor": STEM}
+    reply = (await call(editor, "image_prompt", **ask))["result"]
+    assert reply["key"] == "magenta" and reply["advice"] is None
+    assert "flat magenta" in reply["prompt"] and "Egeria densa" in reply["prompt"]
+    # green is not advised for a plant that is not listed, but it can be forced
+    green = (await call(editor, "image_prompt", **ask, key="green"))["result"]
+    assert "flat green" in green["prompt"] and green["advice"]
+    assert green["default_key"] == "magenta"
+    # a listed plant is asked on green by default, without a warning
+    listed = (
+        await call(
+            editor,
+            "image_prompt",
+            **{**ask, "species": "Ludwigia repens"},
+            entry_id="ludwigia_repens",
+        )
+    )["result"]
+    assert listed["key"] == "green" and listed["advice"] is None
+    # no zone, no growth form
+    lost = await call(editor, "image_prompt", **PLANT)
+    assert lost["error"]["code"] == "no_growth_form"
+
+
+async def test_a_plant_photo_is_asked_with_its_ratio_and_shown_keyed_out(
+    editor, hass, aioclient_mock
+):
+    configure(hass)
+    aioclient_mock.post(GEMINI, json=gemini_reply(plant_bytes()))
+    reply = (await call(editor, "image_generate", **PLANT, descriptor=STEM))["result"]
+    sent = aioclient_mock.mock_calls[-1][2]["generationConfig"]["imageConfig"]
+    assert sent == {"aspectRatio": "3:4"}
+    assert reply["problems"] == [] and reply["key"] == "magenta"
+    assert reply["keyed"].startswith("data:image/webp") and reply["advice"] is None
+    assert reply["default_key"] == "magenta"
+    # trying again on another background is the same call with another key
+    aioclient_mock.clear_requests()
+    aioclient_mock.post(GEMINI, json=gemini_reply(plant_bytes((0, 255, 0))))
+    again = (
+        await call(editor, "image_generate", **PLANT, descriptor=STEM, key="green")
+    )["result"]
+    assert again["key"] == "green" and again["advice"]
+    assert again["token"] != reply["token"]
+    assert {reply["token"], again["token"]} <= set(hass.data[T].photos)
+    sent = aioclient_mock.mock_calls[-1][2]["contents"][0]["parts"][0]["text"]
+    assert "flat green" in sent
+
+
+async def test_a_plant_atlas_is_built_and_only_from_a_plant_photo(
+    editor, hass, aioclient_mock
+):
+    configure(hass)
+    aioclient_mock.post(GEMINI, json=gemini_reply(plant_bytes()))
+    plant = (await call(editor, "image_generate", **PLANT, descriptor=STEM))["result"]
+    build = {**AT, "section": "plants", "kind": "plant", "entry_id": "egeria_densa"}
+    done = (await call(editor, "image_build", **build, photo=plant["token"]))["result"]
+    assert done["frame"] == [320, 320] and done["source"]["type"] == "ai-generated"
+    pending = hass.data[T].atlases[done["token"]][0]
+    assert pending.keys["kind"] == "plant" and pending.keys["columns"] == 1
+    # a fish photo is not the photo of a plant
+    aioclient_mock.clear_requests()
+    aioclient_mock.post(GEMINI, json=gemini_reply(photo_bytes()))
+    fish = (await call(editor, "image_generate", **ask_fish()))["result"]
+    wrong = await call(editor, "image_build", **build, photo=fish["token"])
+    assert wrong["error"]["code"] == "photo_kind"
+
+
+def ask_fish() -> dict:
+    return {"section": "fish", "kind": "fish", "species": "Amphiprion percula"}
+
+
+async def test_a_plant_photo_can_be_uploaded(editor, hass, hass_client):
+    http = await hass_client()
+    form = FormData()
+    form.add_field("file", plant_bytes(), filename="p.png", content_type="image/png")
+    form.add_field("kind", "plant")
+    body = await (await http.post("/api/catalog_editor/photo", data=form)).json()
+    assert body["problems"] == [] and body["keyed"].startswith("data:image/webp")
+    assert hass.data[T].photos[body["token"]][0].kind == "plant"
+
+
+def test_a_green_plant_on_a_green_background_is_seen_eaten():
+    """Why green is advised against: the key makes the plant grey and transparent."""
+    photo = images.inspect_photo(
+        plant_bytes((0, 255, 0), (40, 170, 40)), {"type": "photo"}, "green", "plant"
+    )
+    keyed = images.key_out(images._open(photo.blob), "green")
+    share = int((np.asarray(keyed.getchannel("A")) > 128).sum())
+    plain = images.inspect_photo(plant_bytes(), {"type": "photo"}, "magenta", "plant")
+    kept = images.key_out(images._open(plain.blob), "magenta")
+    assert share < int((np.asarray(kept.getchannel("A")) > 128).sum())
+
+
+def blob_picture(blob: bytes) -> Image.Image:
+    return Image.open(io.BytesIO(blob)).convert("RGB")
+
+
+def box_bytes(box: tuple[float, float, float, float], size=(600, 800)) -> bytes:
+    """A plant drawn as a filled box (fractions of the picture) on magenta."""
+    image = Image.new("RGB", size, (255, 0, 255))
+    w, h = size
+    ImageDraw.Draw(image).rectangle(
+        (w * box[0], h * box[1], w * box[2], h * box[3]), fill=(30, 150, 40)
+    )
+    buffer = io.BytesIO()
+    image.save(buffer, "PNG")
+    return buffer.getvalue()
+
+
+def test_a_plant_is_measured_on_its_larger_side():
+    # narrow and tall: too small for a fish (its width), fine for a plant
+    tall = blob_picture(box_bytes((0.45, 0.1, 0.6, 0.9)))
+    assert any("too small" in p for p in images.check_photo(tall))
+    assert images.check_plant_photo(tall) == []
+    # small both ways: too small for a plant as well
+    tiny = blob_picture(box_bytes((0.45, 0.45, 0.6, 0.6)))
+    problems = images.check_plant_photo(tiny)
+    assert problems == ["the plant is too small in the picture (under 40%)"]
+
+
+def test_a_plant_prompt_refuses_an_unknown_background():
+    with pytest.raises(ValueError, match="key must be one of"):
+        plant.render_plant_prompt("egeria_densa", STEM, "blue")

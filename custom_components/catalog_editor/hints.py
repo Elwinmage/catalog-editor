@@ -39,8 +39,9 @@ SPECIES_KINDS = frozenset(SPECIES)
 #: of the catalogs (a brand keeps its spelling), or a new one
 BRAND_FIELD = {"item": "brand", "supplement": "brand", "water_test": "brand"}
 
-#: Kinds whose degraded atlas the editor makes from a photo (a fish seen from the side)
-ATLAS_KINDS = ("fish",)
+#: Kinds whose degraded atlas the editor makes from a photo (a fish seen from the
+#: side, a plant standing on the bottom of its frame)
+ATLAS_KINDS = ("fish", "plant")
 
 #: Kinds that have a visual (image.webp and thumb.webp next to the descriptor)
 HAS_VISUAL = {
