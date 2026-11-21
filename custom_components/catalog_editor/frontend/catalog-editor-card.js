@@ -86,6 +86,7 @@
       atlas_retry_other: "Try again on a {key} background",
       atlas_regenerate: "Regenerate the picture",
       atlas_raw: "Picture received",
+      atlas_current: "Current picture of the entry (to compare)",
       atlas_keyed: "Once the background is removed (checkerboard = transparent)",
       atlas_history: "Previous attempts (click to look again)",
       atlas_attempt: "Attempt {n}: {key} background",
@@ -252,6 +253,7 @@
       atlas_retry_other: "Réessayer sur un fond {key}",
       atlas_regenerate: "Régénérer l'image",
       atlas_raw: "Image reçue",
+      atlas_current: "Image actuelle de la fiche (pour comparer)",
       atlas_keyed: "Une fois le fond retiré (damier = transparent)",
       atlas_history: "Essais précédents (cliquer pour revoir)",
       atlas_attempt: "Essai {n} : fond {key}",
@@ -429,6 +431,11 @@
     .history { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
     .history button { padding: 0; border: 2px solid transparent; border-radius: 8px; background: none; cursor: pointer; }
     .history button.current { border-color: var(--primary-color); }
+    .current { margin: 8px 0; }
+    .current figure { margin: 0; display: inline-block; text-align: center; }
+    .current figcaption { font-size: 0.8em; }
+    .checker { background: repeating-conic-gradient(#cdcdcd 0% 25%, #f5f5f5 0% 50%) 0 0 / 16px 16px; border-radius: 8px; }
+    .current-frame { background-repeat: no-repeat; background-position: 0 0; }
     .history img { width: 56px; height: 56px; object-fit: contain; border-radius: 6px; display: block; }
     a { color: var(--primary-color); }
   `;
@@ -929,6 +936,7 @@
           photoKey: "magenta",
           photoKeyTouched: false,
           history: [],
+          current: undefined,
           imageStatus: null,
           busy: null,
           report: null,
@@ -1566,6 +1574,37 @@
       return name ? name.charAt(0).toUpperCase() + name.slice(1) : "";
     }
 
+    // The atlas the saved entry has (asked once per form): null while unknown or absent
+    _loadCurrent() {
+      const s = this._s;
+      if (s.current !== undefined) return;
+      s.current = null;
+      if (s.isNew || !s.data.atlas || !s.entryId) return;
+      this.ws("atlas_view", { section: s.section, kind: s.kind, entry_id: s.entryId })
+        .then((view) => {
+          s.current = view;
+          this._paintAtlas();
+        })
+        .catch(() => {});
+    }
+
+    // The first frame of an atlas, at the size of the photos shown below, on a checkerboard
+    _currentPicture(view) {
+      const [width, height] = view.frame;
+      const scale = Math.min(160 / width, 160 / height);
+      const frame = el("div", { class: "current-frame checker" });
+      const inner = el("div", { class: "current-frame" });
+      Object.assign(frame.style, { width: `${Math.round(width * scale)}px`, height: `${Math.round(height * scale)}px` });
+      Object.assign(inner.style, {
+        width: "100%",
+        height: "100%",
+        backgroundImage: `url("${view.image || view.url}")`,
+        backgroundSize: `${Math.round(view.columns * width * scale)}px auto`,
+      });
+      frame.append(inner);
+      return el("div", { class: "current" }, el("figure", {}, frame, el("figcaption", { text: this.t("atlas_current") })));
+    }
+
     _atlasNow() {
       const data = this._s.data;
       if (!data.atlas) return this.t("atlas_now_none");
@@ -1582,6 +1621,9 @@
         el("div", { class: "help", text: this.t(s.kind === "plant" ? "atlas_help_plant" : "atlas_help") }),
         el("div", { class: "sub", text: this._atlasNow() }),
       );
+      // the picture the entry has now, above the generation, to compare the new one with
+      this._loadCurrent();
+      if (s.current) box.append(this._currentPicture(s.current));
       const species = el("input", {
         type: "text",
         value: s.species,

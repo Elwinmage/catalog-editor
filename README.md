@@ -116,8 +116,9 @@ storage (`.storage/catalog_editor`).
   image model again, **on the same background or on the other one** (choosing
   green for a plant that is not listed shows a warning). The attempts of the
   session stay as thumbnails to compare and go back to one. An entry that
-  already has a picture offers *Regenerate the picture*; nothing changes in the
-  entry until the new picture is built and the entry saved.
+  already has a picture shows it at the top of the panel, above the attempts, to
+  compare, and offers *Regenerate the picture*; nothing changes in the entry
+  until the new picture is built and the entry saved.
   Choose the provider (Google Gemini, OpenAI or Cloudflare Workers AI, whose key is written `<account id>:<API token>` and which has a free daily allowance; another is a function in
   `image_providers.py`), the key and, if you want, a model in the **options** of
   the integration. The key stays in the config entry and is never sent back to

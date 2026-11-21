@@ -145,6 +145,7 @@ function setup({ language = "en", providers = true, house = false, reeftank = fa
         case "form":
           return state.form || FORM;
         case "entry":
+          if (state.entryReply) return state.entryReply;
           return {
             data: { category: "heater", brand: "Eheim", name: { en: "Eheim 200" } },
             source: fields.entry_id === "mine" ? "user" : "pack",
@@ -1257,4 +1258,34 @@ test("a plant has a picture to look at, not a loop of clips", async () => {
   const Card = window.customElements.get("catalog-editor-card");
   const still = { still: { from: 0, to: 0, fps: 1, loop: false } };
   assert.equal(Card.playlist(still).map((step) => step.name).join(), "still");
+});
+
+test("the picture an entry has is shown above the new one, to compare", async () => {
+  const ctx = setup({ reeftank: true });
+  ctx.state.form = PLANT_FORM;
+  ctx.state.entryReply = { data: { scientific: "Egeria densa", zone: "background", atlas: { "1x": "egeria_densa.webp" }, degraded: true }, source: "pack", image: null, thumb: null, user_copy: false };
+  ctx.state.atlasView = { frame: [320, 320], columns: 1, degraded: true, url: "/cat/plants/egeria_densa/egeria_densa.webp", clips: { still: { from: 0, to: 0, fps: 1, loop: false } } };
+  ctx.entries["plants/plant"] = [{ id: "egeria_densa", label: "Egeria densa", source: "pack" }];
+  const { root, calls, state } = ctx;
+  await until(() => catalogOption(root, "Plant"));
+  pick(root, "Plant");
+  await until(() => root.querySelector(".entry"));
+  root.querySelectorAll(".entry")[0].click();
+  const current = await until(() => root.querySelector(".atlas .current .current-frame .current-frame"));
+  assert.ok(current.style.backgroundImage.includes("egeria_densa.webp"));
+  assert.equal(last(calls, "atlas_view").atlas, undefined);
+  assert.ok(root.textContent.includes("Current picture of the entry"));
+  // it stays above while a new picture is tried
+  state.photoReply = plantReply("ph1", "magenta");
+  await until(() => button(root, "Regenerate the picture (gemini-x)"));
+  button(root, "Regenerate the picture (gemini-x)").click();
+  await until(() => root.querySelector(".keyed-preview"));
+  const order = [...root.querySelectorAll(".atlas .current, .atlas .compare")].map((node) => node.className);
+  assert.deepEqual(order.join(), "current,picture compare");
+});
+
+test("a new entry has no current picture to show", async () => {
+  const { root, calls } = await openNewPlant();
+  assert.equal(root.querySelector(".atlas .current"), null);
+  assert.equal(calls.some((call) => call.command === "atlas_view"), false);
 });
